@@ -15,6 +15,7 @@ program
   .description('Bota developer CLI')
   .version('0.1.0')
   .option('--api-url <url>', 'Override API base URL')
+  .option('--dashboard-url <url>', 'Override dashboard/portal URL')
   .option('--json', 'Output raw JSON');
 
 registerAuth(program);

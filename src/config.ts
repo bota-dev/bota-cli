@@ -42,12 +42,12 @@ export function getApiUrl(override?: string): string {
 }
 
 export function getDashboardUrl(apiUrl: string): string {
-  // api.bota.dev → dashboard.bota.dev, api.dev.bota.dev → dashboard.dev.bota.dev
+  // api.bota.dev → platform.bota.dev, api.dev.bota.dev → platform.dev.bota.dev
   try {
     const u = new URL(apiUrl);
-    u.hostname = u.hostname.replace(/^api\./, 'dashboard.');
+    u.hostname = u.hostname.replace(/^api\./, 'platform.');
     return u.origin;
   } catch {
-    return 'https://dashboard.bota.dev';
+    return 'https://platform.bota.dev';
   }
 }

@@ -33,7 +33,7 @@ export function registerAuth(program: Command): void {
       const port = 4242;
       const state = randomBytes(16).toString('hex');
       const redirectUri = `http://localhost:${port}/callback`;
-      const dashboardUrl = getDashboardUrl(apiUrl);
+      const dashboardUrl = (globalOpts['dashboardUrl'] as string | undefined) ?? getDashboardUrl(apiUrl);
       const authUrl = `${dashboardUrl}/cli/auth?state=${state}&redirect=${encodeURIComponent(redirectUri)}`;
 
       await new Promise<void>((resolve, reject) => {
@@ -50,24 +50,21 @@ export function registerAuth(program: Command): void {
           const email = url.searchParams.get('email');
           const error = url.searchParams.get('error');
 
-          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
           if (error === 'access_denied') {
             res.end('<html><body><h2>Authorization cancelled. You can close this tab.</h2></body></html>');
-            server.close();
-            reject(new Error('Authorization cancelled'));
+            server.close(() => reject(new Error('Authorization cancelled')));
             return;
           }
 
           if (returnedState !== state || !returnedKey) {
             res.end('<html><body><h2>Invalid response. Please try again.</h2></body></html>');
-            server.close();
-            reject(new Error('Invalid callback state'));
+            server.close(() => reject(new Error('Invalid callback state')));
             return;
           }
 
-          res.end('<html><body><h2>✓ Authenticated! You can close this tab.</h2></body></html>');
-          server.close();
+          res.end('<html><body><h2>&#10003; Authenticated! You can close this tab.</h2></body></html>');
 
           const config = readConfig();
           config.apiKey = returnedKey;
@@ -75,7 +72,7 @@ export function registerAuth(program: Command): void {
           writeConfig(config);
 
           ok(`Logged in as ${email ?? 'unknown'}`);
-          resolve();
+          server.close(() => resolve());
         });
 
         server.listen(port, async () => {
@@ -93,9 +90,8 @@ export function registerAuth(program: Command): void {
 
         // Timeout after 5 minutes
         setTimeout(() => {
-          server.close();
-          reject(new Error('Authorization timed out'));
-        }, 5 * 60 * 1000);
+          server.close(() => reject(new Error('Authorization timed out')));
+        }, 5 * 60 * 1000).unref();
       });
     });
 
