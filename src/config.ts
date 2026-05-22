@@ -40,3 +40,14 @@ export function getApiUrl(override?: string): string {
   const config = readConfig();
   return config.apiUrl ?? DEFAULT_API_URL;
 }
+
+export function getDashboardUrl(apiUrl: string): string {
+  // api.bota.dev → dashboard.bota.dev, api.dev.bota.dev → dashboard.dev.bota.dev
+  try {
+    const u = new URL(apiUrl);
+    u.hostname = u.hostname.replace(/^api\./, 'dashboard.');
+    return u.origin;
+  } catch {
+    return 'https://dashboard.bota.dev';
+  }
+}

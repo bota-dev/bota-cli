@@ -1,5 +1,7 @@
 import { Command } from 'commander';
-import { readConfig, writeConfig, getApiUrl } from '../config.js';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { randomBytes } from 'node:crypto';
+import { readConfig, writeConfig, getApiUrl, getDashboardUrl } from '../config.js';
 import { BotaClient } from '../client.js';
 import { ok, info, warn } from '../output.js';
 
@@ -7,17 +9,94 @@ export function registerAuth(program: Command): void {
   const auth = program.command('auth').description('Manage authentication');
 
   auth
-    .command('login <key>')
-    .description('Save API key')
-    .action(async (key: string) => {
-      if (!key.startsWith('sk_live_') && !key.startsWith('sk_test_')) {
-        console.error('Invalid API key format. Must start with sk_live_ or sk_test_');
-        process.exit(1);
+    .command('login [key]')
+    .description('Authenticate via browser (or pass a key directly for CI)')
+    .action(async (key: string | undefined) => {
+      const globalOpts = program.opts();
+      const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
+
+      if (key) {
+        // Headless / CI path: accept key directly
+        if (!key.startsWith('sk_live_') && !key.startsWith('sk_test_')) {
+          console.error('Invalid key format. Must start with sk_live_ or sk_test_');
+          process.exit(1);
+        }
+        const config = readConfig();
+        config.apiKey = key;
+        config.apiUrl = apiUrl === 'https://api.bota.dev' ? undefined : apiUrl;
+        writeConfig(config);
+        ok(`Logged in with key ${key.slice(0, 10)}...`);
+        return;
       }
-      const config = readConfig();
-      config.apiKey = key;
-      writeConfig(config);
-      ok(`Logged in with key ${key.slice(0, 10)}...`);
+
+      // Browser OAuth flow
+      const port = 4242;
+      const state = randomBytes(16).toString('hex');
+      const redirectUri = `http://localhost:${port}/callback`;
+      const dashboardUrl = getDashboardUrl(apiUrl);
+      const authUrl = `${dashboardUrl}/cli/auth?state=${state}&redirect=${encodeURIComponent(redirectUri)}`;
+
+      await new Promise<void>((resolve, reject) => {
+        const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+          if (!req.url?.startsWith('/callback')) {
+            res.writeHead(404);
+            res.end();
+            return;
+          }
+
+          const url = new URL(req.url, `http://localhost:${port}`);
+          const returnedState = url.searchParams.get('state');
+          const returnedKey = url.searchParams.get('key');
+          const email = url.searchParams.get('email');
+          const error = url.searchParams.get('error');
+
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+
+          if (error === 'access_denied') {
+            res.end('<html><body><h2>Authorization cancelled. You can close this tab.</h2></body></html>');
+            server.close();
+            reject(new Error('Authorization cancelled'));
+            return;
+          }
+
+          if (returnedState !== state || !returnedKey) {
+            res.end('<html><body><h2>Invalid response. Please try again.</h2></body></html>');
+            server.close();
+            reject(new Error('Invalid callback state'));
+            return;
+          }
+
+          res.end('<html><body><h2>✓ Authenticated! You can close this tab.</h2></body></html>');
+          server.close();
+
+          const config = readConfig();
+          config.apiKey = returnedKey;
+          config.apiUrl = apiUrl === 'https://api.bota.dev' ? undefined : apiUrl;
+          writeConfig(config);
+
+          ok(`Logged in as ${email ?? 'unknown'}`);
+          resolve();
+        });
+
+        server.listen(port, async () => {
+          info(`Opening browser to authorize...`);
+          info(`If the browser doesn't open, visit:\n  ${authUrl}`);
+          try {
+            const open = (await import('open')).default;
+            await open(authUrl);
+          } catch {
+            // User will copy the URL manually
+          }
+        });
+
+        server.on('error', reject);
+
+        // Timeout after 5 minutes
+        setTimeout(() => {
+          server.close();
+          reject(new Error('Authorization timed out'));
+        }, 5 * 60 * 1000);
+      });
     });
 
   auth
@@ -34,16 +113,17 @@ export function registerAuth(program: Command): void {
     .command('status')
     .description('Show current auth status')
     .action(async () => {
+      const globalOpts = program.opts();
       const config = readConfig();
       const key = config.apiKey ?? process.env['BOTA_API_KEY'];
 
       if (!key) {
-        warn('Not authenticated');
+        warn('Not authenticated. Run: bota auth login');
         process.exit(1);
       }
 
       const masked = `${key.slice(0, 10)}...${key.slice(-4)}`;
-      const apiUrl = getApiUrl(program.opts()['apiUrl'] as string | undefined);
+      const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
 
       info(`Key:     ${masked}`);
       info(`API URL: ${apiUrl}`);
