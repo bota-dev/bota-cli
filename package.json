@@ -1,0 +1,26 @@
+{
+  "name": "@bota.dev/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "bota": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10",
+    "chalk": "^5",
+    "cli-table3": "^0.6",
+    "commander": "^12",
+    "localtunnel": "^2"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}

@@ -1,0 +1,210 @@
+import { Command } from 'commander';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+import { BotaClient, callMcpTool } from '../client.js';
+import { getApiKey, getApiUrl } from '../config.js';
+
+function ok(data: unknown) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+function fail(e: unknown) {
+  return { content: [{ type: 'text' as const, text: (e as Error).message }], isError: true };
+}
+
+export function registerMcp(program: Command): void {
+  program
+    .command('mcp')
+    .description('Start a local MCP server for IDE integration')
+    .action(async () => {
+      const globalOpts = program.opts();
+      const apiKey = getApiKey();
+      const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
+      const client = new BotaClient({ apiKey, apiUrl });
+
+      const server = new McpServer({ name: 'bota', version: '0.1.0' });
+
+      server.registerTool(
+        'list_end_users',
+        {
+          description: 'List end users',
+          inputSchema: {
+            limit: z.number().optional(),
+            cursor: z.string().optional(),
+            external_id: z.string().optional(),
+          },
+        },
+        async ({ limit, cursor, external_id }) => {
+          try {
+            return ok(await client.get('/v1/end-users', { limit, cursor, external_id }));
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'get_end_user',
+        {
+          description: 'Get end user by ID (eu_...) or external ID',
+          inputSchema: { id: z.string() },
+        },
+        async ({ id }) => {
+          try {
+            if (id.startsWith('eu_')) {
+              return ok(await client.get(`/v1/end-users/${id}`));
+            } else {
+              return ok(await client.get('/v1/end-users', { external_id: id }));
+            }
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'list_devices',
+        {
+          description: 'List devices',
+          inputSchema: {
+            limit: z.number().optional(),
+            end_user_id: z.string().optional(),
+          },
+        },
+        async ({ limit, end_user_id }) => {
+          try {
+            return ok(await client.get('/v1/devices', { limit, end_user_id }));
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'get_device',
+        {
+          description: 'Get device by ID',
+          inputSchema: { id: z.string() },
+        },
+        async ({ id }) => {
+          try {
+            return ok(await client.get(`/v1/devices/${id}`));
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'get_fleet_stats',
+        {
+          description: 'Get fleet statistics',
+          inputSchema: {},
+        },
+        async () => {
+          try {
+            return ok(await client.get('/v1/devices/stats'));
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'list_recordings',
+        {
+          description: 'List recordings',
+          inputSchema: {
+            limit: z.number().optional(),
+            end_user_id: z.string().optional(),
+            device_id: z.string().optional(),
+            status: z.string().optional(),
+          },
+        },
+        async ({ limit, end_user_id, device_id, status }) => {
+          try {
+            return ok(await client.get('/v1/recordings', { limit, end_user_id, device_id, status }));
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'get_recording',
+        {
+          description: 'Get recording by ID including transcription and summary status',
+          inputSchema: { id: z.string() },
+        },
+        async ({ id }) => {
+          try {
+            const recording = await client.get<Record<string, unknown>>(`/v1/recordings/${id}`);
+            const transcriptionRes = await client.get<{ data: Array<Record<string, unknown>> }>('/v1/transcriptions', { recording_id: id }).catch(() => ({ data: [] }));
+            const transcription = transcriptionRes.data[0];
+            if (transcription) {
+              recording['transcription'] = transcription;
+              const summaryRes = await client.get<{ data: Array<Record<string, unknown>> }>('/v1/summaries', { transcription_id: transcription['id'] as string }).catch(() => ({ data: [] }));
+              const summary = summaryRes.data[0];
+              if (summary) recording['summary'] = summary;
+            }
+            return ok(recording);
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'create_transcription',
+        {
+          description: 'Create a transcription for a recording',
+          inputSchema: {
+            recording_id: z.string(),
+            language: z.string().optional(),
+          },
+        },
+        async ({ recording_id, language }) => {
+          try {
+            return ok(await client.post('/v1/transcriptions', { recording_id, language }));
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'create_summary',
+        {
+          description: 'Create a summary from a transcription',
+          inputSchema: {
+            transcription_id: z.string(),
+            template_id: z.string().optional(),
+            prompt: z.string().optional(),
+          },
+        },
+        async ({ transcription_id, template_id, prompt }) => {
+          try {
+            return ok(await client.post('/v1/summaries', { transcription_id, template_id, prompt }));
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'list_webhooks',
+        {
+          description: 'List webhooks',
+          inputSchema: { limit: z.number().optional() },
+        },
+        async ({ limit }) => {
+          try {
+            return ok(await client.get('/v1/webhooks', { limit }));
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      server.registerTool(
+        'trigger_webhook_event',
+        {
+          description: 'Trigger a webhook event for testing',
+          inputSchema: {
+            webhook_id: z.string(),
+            event_type: z.string(),
+          },
+        },
+        async ({ webhook_id, event_type }) => {
+          try {
+            const result = await callMcpTool(apiUrl, apiKey, 'trigger_webhook_event', { webhook_id, event_type });
+            return ok(result);
+          } catch (e) { return fail(e); }
+        },
+      );
+
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+    });
+}
