@@ -102,7 +102,7 @@ export function registerEndUsers(program: Command): void {
 
   eu
     .command('token <id>')
-    .description('Get a user token for an end user')
+    .description('Issue a user token for an end user (replaces any existing token)')
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
@@ -118,6 +118,23 @@ export function registerEndUsers(program: Command): void {
           console.log(`  Command: ${res.connection_command}`);
         }
         console.log('└─────────────────────────────────────────┘');
+      } catch (e) {
+        console.error((e as Error).message);
+        process.exit(1);
+      }
+    });
+
+  eu
+    .command('token-revoke <id>')
+    .description('Revoke the user token for an end user')
+    .action(async (id: string) => {
+      const globalOpts = program.opts();
+      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      try {
+        await client.delete(`/v1/end-users/${id}/user-token`);
+        if (!globalOpts['json']) {
+          ok(`Token revoked for end user ${id}`);
+        }
       } catch (e) {
         console.error((e as Error).message);
         process.exit(1);
