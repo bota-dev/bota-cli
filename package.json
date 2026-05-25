@@ -23,6 +23,7 @@
     "open": "^10.2.0"
   },
   "devDependencies": {
+    "@types/localtunnel": "^2.0.4",
     "@types/node": "^20",
     "tsup": "^8",
     "tsx": "^4",
