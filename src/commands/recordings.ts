@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { BotaClient } from '../client.js';
-import { printTable, printJson, printDetail } from '../output.js';
+import { printTable, printJson, printDetail, ok } from '../output.js';
 import { getApiKey, getApiUrl } from '../config.js';
 
 interface Recording {
@@ -110,6 +110,60 @@ export function registerRecordings(program: Command): void {
           return;
         }
         printDetail(recording as Record<string, unknown>);
+      } catch (e) {
+        console.error((e as Error).message);
+        process.exit(1);
+      }
+    });
+
+  recordings
+    .command('transcribe <id>')
+    .description('Trigger transcription for a recording')
+    .option('--provider <p>', 'ASR provider (whisper, deepgram, assemblyai, elevenlabs)')
+    .action(async (id: string, opts) => {
+      const globalOpts = program.opts();
+      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      try {
+        const txn = await client.post<Transcription>('/v1/transcriptions', {
+          recording_id: id,
+          ...(opts.provider && { provider: opts.provider }),
+        });
+        if (globalOpts['json']) {
+          printJson(txn);
+          return;
+        }
+        ok(`Transcription ${txn.id} started (status: ${txn.status})`);
+      } catch (e) {
+        console.error((e as Error).message);
+        process.exit(1);
+      }
+    });
+
+  recordings
+    .command('summarize <id>')
+    .description('Trigger summary for a recording (looks up transcription automatically)')
+    .option('--provider <p>', 'LLM provider (gemini, openai, claude)')
+    .option('--template <t>', 'Summary template (general_notes, sales_call, clinical_soap, legal_memo)')
+    .action(async (id: string, opts) => {
+      const globalOpts = program.opts();
+      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      try {
+        const txnRes = await client.get<TranscriptionListResponse>('/v1/transcriptions', { recording_id: id });
+        const txn = txnRes.data[0];
+        if (!txn) {
+          console.error('No transcription found for this recording. Run: bota recordings transcribe <id>');
+          process.exit(1);
+        }
+        const summary = await client.post<Summary>('/v1/summaries', {
+          transcription_id: txn.id,
+          ...(opts.provider && { provider: opts.provider }),
+          ...(opts.template && { template: opts.template }),
+        });
+        if (globalOpts['json']) {
+          printJson(summary);
+          return;
+        }
+        ok(`Summary ${summary.id} started (status: ${summary.status})`);
       } catch (e) {
         console.error((e as Error).message);
         process.exit(1);
