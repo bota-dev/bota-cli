@@ -141,6 +141,9 @@ Full documentation at [docs.bota.dev/cli](https://docs.bota.dev/cli).
 
 ## Development checks
 
+The shared loopback helpers and signal-relay fixture are versioned with the
+regressions so these checks run from a fresh checkout.
+
 ```bash
 npm ci
 npm run type-check
