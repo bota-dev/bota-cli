@@ -21,20 +21,36 @@ export function printPagination(page: { has_more?: boolean; next_cursor?: string
   }
 }
 
-export function printError(error: unknown, json = false): void {
+export function errorDetails(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (!json) {
-    console.error(message);
-    return;
-  }
-  const detail = error as { status?: number; code?: unknown; param?: string; requestId?: string } | null;
-  console.error(JSON.stringify({ error: {
+  const detail = error as { status?: number; code?: unknown; param?: string; requestId?: string; retryAfter?: string; rateLimit?: Record<string, string> } | null;
+  return {
     message,
     ...(typeof detail?.status === 'number' && { status: detail.status }),
     ...((typeof detail?.code === 'string' || typeof detail?.code === 'number') && { code: detail.code }),
     ...(typeof detail?.param === 'string' && { param: detail.param }),
     ...(typeof detail?.requestId === 'string' && { request_id: detail.requestId }),
-  } }));
+    ...(typeof detail?.retryAfter === 'string' && { retry_after: detail.retryAfter }),
+    ...(detail?.rateLimit && { rate_limit: detail.rateLimit }),
+  };
+}
+
+export function printError(error: unknown, json = false): void {
+  const detail = errorDetails(error);
+  if (!json) {
+    console.error(detail.message);
+    const diagnostics = [
+      ...(detail.status !== undefined ? [`HTTP ${detail.status}`] : []),
+      ...(detail.code !== undefined ? [`code: ${detail.code}`] : []),
+      ...(detail.param !== undefined ? [`parameter: ${detail.param}`] : []),
+      ...(detail.request_id !== undefined ? [`request ID: ${detail.request_id}`] : []),
+      ...(detail.retry_after !== undefined ? [`Retry-After: ${detail.retry_after}`] : []),
+      ...Object.entries(detail.rate_limit ?? {}).map(([name, value]) => `${name}: ${value}`),
+    ];
+    if (diagnostics.length) console.error(diagnostics.join('; '));
+    return;
+  }
+  console.error(JSON.stringify({ error: detail }));
 }
 
 export function printDetail(obj: Record<string, unknown>): void {

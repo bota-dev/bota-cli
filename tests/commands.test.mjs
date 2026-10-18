@@ -64,6 +64,54 @@ test('recording list accepts the published end-user-id flag and exposes continua
   assert.deepEqual(JSON.parse(result.stdout), page);
 });
 
+test('recording list forwards the public creation-date filters with the cursor and existing filters intact', async t => {
+  const api = await fixture(t, (req, res) => {
+    const url = new URL(req.url, 'http://fixture');
+    assert.equal(url.pathname, '/v1/recordings');
+    assert.deepEqual(Object.fromEntries(url.searchParams), {
+      limit: '7', cursor: 'cursor-one', end_user_id: 'eu_one', device_id: 'dev_one', status: 'uploaded',
+      start_date: '2026-10-01T00:00:00+08:00', end_date: '2026-10-18T00:00:00Z',
+    });
+    json(res, { data: [], has_more: false });
+  });
+  const result = await runCli(t, api.url, ['recordings', 'list', '--limit', '7', '--cursor', 'cursor-one', '--end-user', 'eu_one', '--device', 'dev_one', '--status', 'uploaded', '--start-date', '2026-10-01T00:00:00+08:00', '--end-date', '2026-10-18T00:00:00Z', '--json']);
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { data: [], has_more: false });
+  assert.equal(api.requests.length, 1);
+});
+
+for (const stage of ['transcriptions', 'summaries']) {
+  test(`recording get reports a failed ${stage} read instead of a complete-looking success`, async t => {
+    const api = await fixture(t, (req, res) => {
+      const path = new URL(req.url, 'http://fixture').pathname;
+      assert.equal(req.method, 'GET');
+      if (path === '/v1/recordings/rec_one') return json(res, { id: 'rec_one', status: 'uploaded' });
+      if (path === `/v1/${stage}`) return json(res, { error: { code: 'insufficient_permissions', message: `Fixture ${stage} denied`, request_id: 'req_enrichment' } }, 403);
+      assert.equal(path, '/v1/transcriptions');
+      json(res, { data: [{ id: 'txn_one', status: 'completed' }] });
+    });
+    const result = await runCli(t, api.url, ['recordings', 'get', 'rec_one', '--json']);
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, '');
+    assert.deepEqual(JSON.parse(result.stderr), { error: { message: `Fixture ${stage} denied`, status: 403, code: 'insufficient_permissions', request_id: 'req_enrichment' } });
+    assert.equal(api.requests.length, stage === 'transcriptions' ? 2 : 3);
+  });
+
+  test(`recording get retains success when the ${stage} list is legitimately empty`, async t => {
+    const api = await fixture(t, (req, res) => {
+      const path = new URL(req.url, 'http://fixture').pathname;
+      if (path === '/v1/recordings/rec_one') return json(res, { id: 'rec_one', status: 'uploaded' });
+      if (path === `/v1/${stage}`) return json(res, { data: [], has_more: false });
+      assert.equal(path, '/v1/transcriptions');
+      json(res, { data: [{ id: 'txn_one', status: 'completed' }] });
+    });
+    const result = await runCli(t, api.url, ['recordings', 'get', 'rec_one', '--json']);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { id: 'rec_one', status: 'uploaded', ...(stage === 'summaries' && { transcription_status: 'completed', transcription_id: 'txn_one' }) });
+    assert.equal(api.requests.length, stage === 'transcriptions' ? 2 : 3);
+  });
+}
+
 test('end-user tables expose the backend continuation and retain the supplied cursor', async t => {
   const api = await fixture(t, (req, res) => {
     assert.equal(new URL(req.url, 'http://fixture').searchParams.get('cursor'), 'cursor-one');
@@ -80,6 +128,25 @@ test('JSON command failures preserve backend details on stderr and return failur
   assert.equal(result.code, 1);
   assert.equal(result.stdout, '');
   assert.deepEqual(JSON.parse(result.stderr), { error: { message: 'Fixture read denied', status: 403, code: 'insufficient_permissions', request_id: 'req_fixture' } });
+});
+
+test('human and JSON diagnostics retain header-only request IDs and retry advice without raw response content', async t => {
+  const rateLimit = { 'ratelimit-reset': '1', 'x-ratelimit-reset': '1792347000' };
+  const api = await fixture(t, (_req, res) => {
+    res.setHeader('X-Request-Id', 'req_rate_fixture');
+    res.setHeader('Retry-After', '60');
+    for (const [name, value] of Object.entries(rateLimit)) res.setHeader(name, value);
+    json(res, { error: { code: 'rate_limit_exceeded', message: 'Fixture limit reached', param: 'limit' }, debug: 'BODY_SECRET' }, 429);
+  });
+  const human = await runCli(t, api.url, ['devices', 'list']);
+  assert.equal(human.code, 1);
+  assert.equal(human.stdout, '');
+  for (const detail of ['Fixture limit reached', '429', 'rate_limit_exceeded', 'limit', 'req_rate_fixture', '60', 'ratelimit-reset: 1', 'x-ratelimit-reset: 1792347000']) assert.ok(human.stderr.includes(detail), human.stderr);
+  const structured = await runCli(t, api.url, ['devices', 'list', '--json']);
+  assert.equal(structured.code, 1);
+  assert.deepEqual(JSON.parse(structured.stderr), { error: { message: 'Fixture limit reached', status: 429, code: 'rate_limit_exceeded', param: 'limit', request_id: 'req_rate_fixture', retry_after: '60', rate_limit: rateLimit } });
+  assert.doesNotMatch(human.stderr + structured.stderr, /BODY_SECRET|sk_test_fixture/);
+  assert.equal(api.requests.length, 2);
 });
 
 test('Platform-only webhook commands fail before network or tunnel setup', async t => {

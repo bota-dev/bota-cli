@@ -5,13 +5,17 @@ import { z } from 'zod';
 import { BotaClient, callMcpTool } from '../client.js';
 import { getApiKey, getApiUrl } from '../config.js';
 import { WEBHOOK_MANAGEMENT_UNAVAILABLE } from './webhooks.js';
+import { errorDetails } from '../output.js';
 
 function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
 }
 
 function fail(e: unknown) {
-  return { content: [{ type: 'text' as const, text: (e as Error).message }], isError: true };
+  const detail = errorDetails(e);
+  const content = [{ type: 'text' as const, text: detail.message }];
+  if (Object.keys(detail).length > 1) content.push({ type: 'text', text: JSON.stringify({ error: detail }) });
+  return { content, isError: true };
 }
 
 export function registerMcp(program: Command): void {
@@ -113,11 +117,13 @@ export function registerMcp(program: Command): void {
             end_user_id: z.string().optional(),
             device_id: z.string().optional(),
             status: z.string().optional(),
+            start_date: z.string().optional().describe('Include recordings created at or after this ISO timestamp'),
+            end_date: z.string().optional().describe('Include recordings created before this ISO timestamp'),
           },
         },
-        async ({ limit, cursor, end_user_id, device_id, status }) => {
+        async ({ limit, cursor, end_user_id, device_id, status, start_date, end_date }) => {
           try {
-            return ok(await client.get('/v1/recordings', { limit, cursor, end_user_id, device_id, status }));
+            return ok(await client.get('/v1/recordings', { limit, cursor, end_user_id, device_id, status, start_date, end_date }));
           } catch (e) { return fail(e); }
         },
       );
@@ -131,11 +137,11 @@ export function registerMcp(program: Command): void {
         async ({ id }) => {
           try {
             const recording = await client.get<Record<string, unknown>>(`/v1/recordings/${id}`);
-            const transcriptionRes = await client.get<{ data: Array<Record<string, unknown>> }>('/v1/transcriptions', { recording_id: id }).catch(() => ({ data: [] }));
+            const transcriptionRes = await client.get<{ data: Array<Record<string, unknown>> }>('/v1/transcriptions', { recording_id: id });
             const transcription = transcriptionRes.data[0];
             if (transcription) {
               recording['transcription'] = transcription;
-              const summaryRes = await client.get<{ data: Array<Record<string, unknown>> }>('/v1/summaries', { transcription_id: transcription['id'] as string }).catch(() => ({ data: [] }));
+              const summaryRes = await client.get<{ data: Array<Record<string, unknown>> }>('/v1/summaries', { transcription_id: transcription['id'] as string });
               const summary = summaryRes.data[0];
               if (summary) recording['summary'] = summary;
             }

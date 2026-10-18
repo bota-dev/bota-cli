@@ -53,6 +53,8 @@ export function registerRecordings(program: Command): void {
     .option('--end-user-id <eu_...>', 'Alias for --end-user')
     .option('--device <dev_...>', 'Filter by device ID')
     .option('--status <s>', 'Filter by status')
+    .option('--start-date <iso>', 'Filter created_at at or after this ISO timestamp')
+    .option('--end-date <iso>', 'Filter created_at before this ISO timestamp')
     .action(async (opts) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
@@ -63,6 +65,8 @@ export function registerRecordings(program: Command): void {
           end_user_id: opts.endUser ?? opts.endUserId,
           device_id: opts.device,
           status: opts.status,
+          start_date: opts.startDate,
+          end_date: opts.endDate,
         });
         if (globalOpts['json']) {
           printJson(res);
@@ -94,16 +98,14 @@ export function registerRecordings(program: Command): void {
       try {
         const recording = await client.get<Recording>(`/v1/recordings/${id}`);
 
-        const [transcriptionRes] = await Promise.all([
-          client.get<TranscriptionListResponse>('/v1/transcriptions', { recording_id: id }).catch(() => ({ data: [] })),
-        ]);
+        const transcriptionRes = await client.get<TranscriptionListResponse>('/v1/transcriptions', { recording_id: id });
 
         const transcription = transcriptionRes.data[0];
         if (transcription) {
           recording['transcription_status'] = transcription.status;
           recording['transcription_id'] = transcription.id;
 
-          const summaryRes = await client.get<SummaryListResponse>('/v1/summaries', { transcription_id: transcription.id }).catch(() => ({ data: [] }));
+          const summaryRes = await client.get<SummaryListResponse>('/v1/summaries', { transcription_id: transcription.id });
           const summary = summaryRes.data[0];
           if (summary) {
             recording['summary_status'] = summary.status;

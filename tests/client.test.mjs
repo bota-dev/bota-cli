@@ -4,7 +4,10 @@ import { BotaClient, callMcpTool } from '../src/client.ts';
 import { fixture, json } from './helpers.mjs';
 
 test('REST errors retain status, code, parameter and request ID', async t => {
-  const api = await fixture(t, (_req, res) => json(res, { error: { code: 'validation_error', message: 'Select a template', param: 'template_id', request_id: 'req_fixture' } }, 400));
+  const api = await fixture(t, (_req, res) => {
+    res.setHeader('X-Request-Id', 'req_header_fallback');
+    json(res, { error: { code: 'validation_error', message: 'Select a template', param: 'template_id', request_id: 'req_fixture' } }, 400);
+  });
   const client = new BotaClient({ apiKey: 'sk_test_fixture', apiUrl: api.url });
   await assert.rejects(client.post('/v1/summaries', {}), error => {
     assert.equal(error.message, 'Select a template');
@@ -24,6 +27,58 @@ test('REST handles 204 and non-JSON errors without losing the HTTP status', asyn
   const client = new BotaClient({ apiKey: 'sk_test_fixture', apiUrl: api.url });
   assert.equal(await client.delete('/v1/end-users/eu_one'), undefined);
   await assert.rejects(client.get('/v1/devices'), /HTTP 502/);
+});
+
+test('REST retains header request IDs and Retry-After without exposing other response content or retrying', async t => {
+  const api = await fixture(t, (_req, res) => {
+    res.setHeader('X-Request-Id', 'req_header');
+    res.setHeader('Retry-After', '120');
+    json(res, { error: { code: 'rate_limit_exceeded', message: 'Fixture quota reached' }, debug: 'BODY_SECRET' }, 429);
+  });
+  const client = new BotaClient({ apiKey: 'sk_test_fixture', apiUrl: api.url });
+  await assert.rejects(client.get('/v1/devices'), error => {
+    assert.equal(error.status, 429);
+    assert.equal(error.requestId, 'req_header');
+    assert.equal(error.retryAfter, '120');
+    assert.doesNotMatch(JSON.stringify(error), /BODY_SECRET|sk_test_fixture/);
+    return true;
+  });
+  assert.equal(api.requests.length, 1);
+});
+
+test('REST preserves HTTP-date Retry-After and header diagnostics on a non-JSON failure', async t => {
+  const api = await fixture(t, (_req, res) => {
+    res.writeHead(503, { 'X-Request-Id': 'req_upstream', 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' });
+    res.end('<html>BODY_SECRET</html>');
+  });
+  const client = new BotaClient({ apiKey: 'sk_test_fixture', apiUrl: api.url });
+  await assert.rejects(client.get('/v1/devices'), error => {
+    assert.equal(error.message, 'HTTP 503');
+    assert.equal(error.requestId, 'req_upstream');
+    assert.equal(error.retryAfter, 'Wed, 21 Oct 2026 07:28:00 GMT');
+    assert.doesNotMatch(JSON.stringify(error), /BODY_SECRET/);
+    return true;
+  });
+});
+
+test('REST retains both rate-limit header families verbatim and excludes unrelated headers', async t => {
+  const rateLimit = {
+    'ratelimit-limit': '100', 'ratelimit-remaining': '0', 'ratelimit-reset': '1', 'ratelimit-policy': '100;w=1',
+    'x-ratelimit-limit': '60', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1792347000', 'x-ratelimit-tier': 'free',
+  };
+  const api = await fixture(t, (_req, res) => {
+    for (const [name, value] of Object.entries(rateLimit)) res.setHeader(name, value);
+    res.setHeader('Set-Cookie', 'session=COOKIE_SECRET');
+    res.setHeader('X-Debug-Secret', 'HEADER_SECRET');
+    json(res, { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Fixture rate limit' } }, 429);
+  });
+  const client = new BotaClient({ apiKey: 'sk_test_fixture', apiUrl: api.url });
+  await assert.rejects(client.get('/v1/devices'), error => {
+    assert.deepEqual(error.rateLimit, rateLimit);
+    assert.doesNotMatch(JSON.stringify(error), /COOKIE_SECRET|HEADER_SECRET/);
+    return true;
+  });
+  assert.equal(api.requests.length, 1);
 });
 
 test('REST refuses redirects without forwarding a credential to another origin', async t => {

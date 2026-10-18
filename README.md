@@ -55,6 +55,7 @@ Device tables use the API's `battery_percent` and `last_heartbeat_at` fields.
 bota recordings list
 bota recordings list --end-user-id eu_abc123
 bota recordings list --cursor <next_cursor>
+bota recordings list --start-date 2026-10-01T00:00:00Z --end-date 2026-10-18T00:00:00Z
 bota recordings get <id>
 bota recordings transcribe <id> --provider deepgram
 bota recordings summarize <id> --template general_notes
@@ -62,6 +63,10 @@ bota recordings summarize <id> --prompt "Summarize the agreed next steps."
 ```
 
 `--end-user` and `--end-user-id` both filter recordings. End-user, device, and recording lists accept `--limit` and `--cursor`. Tables report the next cursor on stderr; `--json` preserves the API page, including `has_more` and `next_cursor`.
+
+Recording lists also expose `--device`, `--status`, `--start-date`, and `--end-date`. Date bounds filter `created_at`, with an inclusive start and exclusive end, and are passed to the public API as `start_date` and `end_date`. Dashboard-only search and transcription/summary status filters are not public API filters.
+
+`recordings get` reads transcription and summary metadata after the recording. A successful empty list means that result is absent. A failed related read returns a nonzero exit and diagnostics instead of presenting partial metadata as a complete success; the credential needs the corresponding read scopes.
 
 Summaries require exactly one of `--template` and `--prompt`. The four built-in aliases (`general_notes`, `sales_call`, `clinical_soap`, `legal_memo`) map to their `tmpl_` IDs; an exact template ID also works. Prompts must contain 10–10000 characters. A requested transcription/summary reports its actual job state; it does not mean processing has completed.
 
@@ -104,9 +109,11 @@ bota mcp
 claude mcp add bota -- bota mcp
 ```
 
-The local server has curated tools for end-user/device/recording reads, transcription and summary requests, and explicit webhook tests. It does not expose every CLI command. `list_webhooks` remains registered for compatibility but returns the Platform-only error locally. Device and recording list tools now accept an optional cursor.
+The local server has curated tools for end-user/device/recording reads, transcription and summary requests, and explicit webhook tests. It does not expose every CLI command. `list_webhooks` remains registered for compatibility but returns the Platform-only error locally. Device and recording list tools accept an optional cursor. Local `list_recordings` also accepts `start_date` and `end_date` with the creation-date semantics above.
 
 This repair retains the 0.1 local tool output shapes and transcription defaults. It does not replace the server with hosted forwarding: external-ID `get_end_user` still returns a page envelope, `get_recording` stays flattened with optional nested transcription/summary, and omitted transcription language remains omitted. A future versioned migration is required to change those contracts.
+
+Failed related reads in local `get_recording` return `isError: true`; successful empty lists retain the existing flattened success shape. Local errors retain their first text message and add a second JSON text block when structured HTTP diagnostics are available.
 
 ## Global flags
 
@@ -124,7 +131,7 @@ bota --api-url https://api.dev.bota.dev end-users list
 bota end-users list --json | jq '.data[].id'
 ```
 
-For the resource commands and explicit webhook tests above, JSON failures are written to stderr as an `error` object; backend status, code, parameter, and request ID are retained when supplied. Success payloads stay on stdout. HTTP requests have a deadline and reject redirects rather than forwarding credentials to another origin.
+For the resource commands and explicit webhook tests above, JSON failures are written to stderr as an `error` object; backend status, code, parameter, and request ID are retained when supplied. REST errors use `X-Request-Id` when the body omits its ID and retain `Retry-After` as `retry_after`. An optional `rate_limit` object contains the supplied `RateLimit-Limit/Remaining/Reset/Policy` and `X-RateLimit-Limit/Remaining/Reset/Tier` headers under their lowercase names. Values stay as supplied; the two reset header families can use different units. Human stderr includes the same available diagnostics. These values do not trigger automatic retries. Success payloads stay on stdout. HTTP requests have a deadline and reject redirects rather than forwarding credentials to another origin.
 
 ## Configuration
 

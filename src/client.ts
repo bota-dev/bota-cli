@@ -13,14 +13,23 @@ export class BotaApiError extends Error {
   readonly code?: string;
   readonly param?: string;
   readonly requestId?: string;
+  readonly retryAfter?: string;
+  readonly rateLimit?: Record<string, string>;
 
-  constructor(status: number, error?: { message?: string; code?: string; param?: string; request_id?: string }) {
-    super(error?.message ?? `HTTP ${status}`);
+  constructor(status: number, error?: { message?: string; code?: string; param?: string; request_id?: string }, headers?: Headers) {
+    super(typeof error?.message === 'string' ? error.message : `HTTP ${status}`);
     this.name = 'BotaApiError';
     this.status = status;
-    this.code = error?.code;
-    this.param = error?.param;
-    this.requestId = error?.request_id;
+    this.code = typeof error?.code === 'string' ? error.code : undefined;
+    this.param = typeof error?.param === 'string' ? error.param : undefined;
+    this.requestId = typeof error?.request_id === 'string' ? error.request_id : headers?.get('x-request-id') ?? undefined;
+    this.retryAfter = headers?.get('retry-after') ?? undefined;
+    const rateLimit: Record<string, string> = {};
+    for (const name of ['ratelimit-limit', 'ratelimit-remaining', 'ratelimit-reset', 'ratelimit-policy', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'x-ratelimit-tier']) {
+      const value = headers?.get(name);
+      if (value !== undefined && value !== null) rateLimit[name] = value;
+    }
+    if (Object.keys(rateLimit).length) this.rateLimit = rateLimit;
   }
 }
 
@@ -61,7 +70,7 @@ export class BotaClient {
     const data = await res.json().catch(() => undefined) as Record<string, unknown> | undefined;
 
     if (!res.ok) {
-      throw new BotaApiError(res.status, data?.['error'] as ConstructorParameters<typeof BotaApiError>[1]);
+      throw new BotaApiError(res.status, data?.['error'] as ConstructorParameters<typeof BotaApiError>[1], res.headers);
     }
 
     if (data === undefined) throw new Error(`HTTP ${res.status}: expected a JSON response`);
