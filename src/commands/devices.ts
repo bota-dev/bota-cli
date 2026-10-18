@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { BotaClient } from '../client.js';
-import { printTable, printJson, printDetail } from '../output.js';
+import { printTable, printJson, printDetail, printPagination, printError } from '../output.js';
 import { getApiKey, getApiUrl } from '../config.js';
 
 interface Device {
@@ -8,13 +8,15 @@ interface Device {
   name: string;
   model: string;
   status: string;
-  battery_level?: number;
-  last_seen_at?: string;
+  battery_percent?: number | null;
+  last_heartbeat_at?: string | null;
   [key: string]: unknown;
 }
 
 interface ListResponse {
   data: Device[];
+  has_more?: boolean;
+  next_cursor?: string;
 }
 
 export function registerDevices(program: Command): void {
@@ -24,6 +26,7 @@ export function registerDevices(program: Command): void {
     .command('list')
     .description('List devices')
     .option('--limit <n>', 'Max results', '20')
+    .option('--cursor <c>', 'Pagination cursor')
     .option('--end-user <eu_...>', 'Filter by end user ID')
     .action(async (opts) => {
       const globalOpts = program.opts();
@@ -31,6 +34,7 @@ export function registerDevices(program: Command): void {
       try {
         const res = await client.get<ListResponse>('/v1/devices', {
           limit: opts.limit,
+          cursor: opts.cursor,
           end_user_id: opts.endUser,
         });
         if (globalOpts['json']) {
@@ -38,24 +42,26 @@ export function registerDevices(program: Command): void {
           return;
         }
         printTable(
-          ['id', 'name', 'model', 'status', 'battery_level', 'last_seen_at'],
+          ['id', 'name', 'model', 'status', 'battery_percent', 'last_heartbeat_at'],
           res.data.map(d => [
             d.id,
             d.name,
             d.model,
             d.status,
-            d.battery_level !== undefined ? String(d.battery_level) : '',
-            d.last_seen_at ?? '',
+            d.battery_percent != null ? String(d.battery_percent) : '',
+            d.last_heartbeat_at ?? '',
           ]),
         );
+        printPagination(res);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
   devices
     .command('get <id>')
+    .alias('inspect')
     .description('Get device by ID')
     .action(async (id: string) => {
       const globalOpts = program.opts();
@@ -68,8 +74,8 @@ export function registerDevices(program: Command): void {
         }
         printDetail(device as Record<string, unknown>);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
@@ -87,8 +93,8 @@ export function registerDevices(program: Command): void {
         }
         printDetail(stats);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 }

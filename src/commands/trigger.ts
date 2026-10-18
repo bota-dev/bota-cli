@@ -1,65 +1,21 @@
 import { Command } from 'commander';
-import { BotaClient, callMcpTool } from '../client.js';
-import { printTable, ok } from '../output.js';
+import { callMcpTool } from '../client.js';
+import { ok, printJson } from '../output.js';
 import { getApiKey, getApiUrl } from '../config.js';
 
-interface Webhook {
-  id: string;
-  url: string;
-  events: string[];
-  created_at: string;
-}
-
-interface ListResponse {
-  data: Webhook[];
-}
-
 export function registerTrigger(program: Command): void {
-  program
-    .command('trigger <event>')
-    .description('Trigger a webhook event')
-    .option('--webhook <id>', 'Webhook ID to trigger')
+  program.command('trigger <event>')
+    .description('Trigger a test event for an existing Platform-managed webhook')
+    .option('--webhook <id>', 'Existing webhook ID from Bota Platform (required)')
     .action(async (event: string, opts) => {
+      if (!opts.webhook) throw new Error('Select an existing webhook in Bota Platform and provide --webhook <id>. Automatic webhook selection is unavailable.');
       const globalOpts = program.opts();
-      const apiKey = getApiKey();
-      const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
-      const client = new BotaClient({ apiKey, apiUrl });
-
-      let webhookId: string = opts.webhook;
-
-      if (!webhookId) {
-        try {
-          const res = await client.get<ListResponse>('/v1/webhooks');
-          if (res.data.length === 0) {
-            console.error('No webhooks found. Create one first.');
-            process.exit(1);
-          }
-          if (res.data.length === 1) {
-            webhookId = res.data[0].id;
-          } else {
-            console.error('Multiple webhooks found. Specify one with --webhook:');
-            printTable(
-              ['id', 'url', 'events'],
-              res.data.map(w => [w.id, w.url, w.events.join(', ')]),
-            );
-            process.exit(1);
-          }
-        } catch (e) {
-          console.error((e as Error).message);
-          process.exit(1);
-        }
+      const result = await callMcpTool(getApiUrl(globalOpts['apiUrl'] as string | undefined), getApiKey(), 'trigger_webhook_event', { webhook_id: opts.webhook, event_type: event });
+      if (globalOpts['json']) {
+        try { printJson(JSON.parse(result)); } catch { printJson(result); }
+        return;
       }
-
-      try {
-        const result = await callMcpTool(apiUrl, apiKey, 'trigger_webhook_event', {
-          webhook_id: webhookId,
-          event_type: event,
-        });
-        ok(`Triggered ${event} on webhook ${webhookId}`);
-        console.log(result);
-      } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
-      }
+      ok(`Triggered ${event} on webhook ${opts.webhook}`);
+      console.log(result);
     });
 }

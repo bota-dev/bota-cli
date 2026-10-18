@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { BotaClient } from '../client.js';
-import { printTable, printJson, printDetail, ok } from '../output.js';
+import { printTable, printJson, printDetail, printPagination, printError, ok } from '../output.js';
 import { getApiKey, getApiUrl } from '../config.js';
 
 interface EndUser {
@@ -14,6 +14,8 @@ interface EndUser {
 
 interface ListResponse {
   data: EndUser[];
+  has_more?: boolean;
+  next_cursor?: string;
 }
 
 interface TokenResponse {
@@ -48,9 +50,10 @@ export function registerEndUsers(program: Command): void {
           ['id', 'name', 'email', 'external_id', 'created_at'],
           res.data.map(u => [u.id, u.name, u.email ?? '', u.external_id ?? '', u.created_at]),
         );
+        printPagination(res);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
@@ -68,8 +71,8 @@ export function registerEndUsers(program: Command): void {
         }
         printDetail(user as Record<string, unknown>);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
@@ -95,8 +98,8 @@ export function registerEndUsers(program: Command): void {
         ok(`Created end user ${user.id}`);
         printDetail(user as Record<string, unknown>);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
@@ -119,8 +122,8 @@ export function registerEndUsers(program: Command): void {
         }
         console.log('└─────────────────────────────────────────┘');
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
@@ -136,8 +139,8 @@ export function registerEndUsers(program: Command): void {
           ok(`Token revoked for end user ${id}`);
         }
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 }

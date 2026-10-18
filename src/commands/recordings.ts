@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { BotaClient } from '../client.js';
-import { printTable, printJson, printDetail, ok } from '../output.js';
+import { printTable, printJson, printDetail, printPagination, printError, ok } from '../output.js';
 import { getApiKey, getApiUrl } from '../config.js';
 
 interface Recording {
@@ -17,6 +17,8 @@ interface Recording {
 
 interface ListResponse {
   data: Recording[];
+  has_more?: boolean;
+  next_cursor?: string;
 }
 
 interface Transcription {
@@ -46,7 +48,9 @@ export function registerRecordings(program: Command): void {
     .command('list')
     .description('List recordings')
     .option('--limit <n>', 'Max results', '20')
+    .option('--cursor <c>', 'Pagination cursor')
     .option('--end-user <eu_...>', 'Filter by end user ID')
+    .option('--end-user-id <eu_...>', 'Alias for --end-user')
     .option('--device <dev_...>', 'Filter by device ID')
     .option('--status <s>', 'Filter by status')
     .action(async (opts) => {
@@ -55,7 +59,8 @@ export function registerRecordings(program: Command): void {
       try {
         const res = await client.get<ListResponse>('/v1/recordings', {
           limit: opts.limit,
-          end_user_id: opts.endUser,
+          cursor: opts.cursor,
+          end_user_id: opts.endUser ?? opts.endUserId,
           device_id: opts.device,
           status: opts.status,
         });
@@ -73,9 +78,10 @@ export function registerRecordings(program: Command): void {
             r.created_at,
           ]),
         );
+        printPagination(res);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
@@ -111,8 +117,8 @@ export function registerRecordings(program: Command): void {
         }
         printDetail(recording as Record<string, unknown>);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
@@ -132,10 +138,10 @@ export function registerRecordings(program: Command): void {
           printJson(txn);
           return;
         }
-        ok(`Transcription ${txn.id} started (status: ${txn.status})`);
+        ok(`Transcription ${txn.id} requested (status: ${txn.status})`);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 
@@ -143,30 +149,37 @@ export function registerRecordings(program: Command): void {
     .command('summarize <id>')
     .description('Trigger summary for a recording (looks up transcription automatically)')
     .option('--provider <p>', 'LLM provider (gemini, openai, claude)')
-    .option('--template <t>', 'Summary template (general_notes, sales_call, clinical_soap, legal_memo)')
+    .option('--template <id>', 'Template ID or built-in alias (general_notes, sales_call, clinical_soap, legal_memo)')
+    .option('--prompt <text>', 'Custom summary prompt (10–10000 characters; alternative to --template)')
     .action(async (id: string, opts) => {
+      if (Boolean(opts.template) === Boolean(opts.prompt)) {
+        throw new Error('Provide exactly one of --template or --prompt');
+      }
+      if (opts.prompt && (opts.prompt.length < 10 || opts.prompt.length > 10000)) {
+        throw new Error('--prompt must contain 10–10000 characters');
+      }
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
         const txnRes = await client.get<TranscriptionListResponse>('/v1/transcriptions', { recording_id: id });
         const txn = txnRes.data[0];
         if (!txn) {
-          console.error('No transcription found for this recording. Run: bota recordings transcribe <id>');
-          process.exit(1);
+          throw new Error('No transcription found for this recording. Run: bota recordings transcribe <id>');
         }
         const summary = await client.post<Summary>('/v1/summaries', {
           transcription_id: txn.id,
           ...(opts.provider && { provider: opts.provider }),
-          ...(opts.template && { template: opts.template }),
+          ...(opts.template && { template_id: ['general_notes', 'sales_call', 'clinical_soap', 'legal_memo'].includes(opts.template) ? `tmpl_${opts.template}` : opts.template }),
+          ...(opts.prompt && { prompt: opts.prompt }),
         });
         if (globalOpts['json']) {
           printJson(summary);
           return;
         }
-        ok(`Summary ${summary.id} started (status: ${summary.status})`);
+        ok(`Summary ${summary.id} requested (status: ${summary.status})`);
       } catch (e) {
-        console.error((e as Error).message);
-        process.exit(1);
+        printError(e, Boolean(globalOpts['json']));
+        process.exitCode = 1;
       }
     });
 }

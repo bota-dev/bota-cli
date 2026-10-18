@@ -1,8 +1,27 @@
 import { getApiKey, getApiUrl } from './config.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 
 interface ClientOptions {
   apiKey?: string;
   apiUrl?: string;
+}
+
+export class BotaApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly param?: string;
+  readonly requestId?: string;
+
+  constructor(status: number, error?: { message?: string; code?: string; param?: string; request_id?: string }) {
+    super(error?.message ?? `HTTP ${status}`);
+    this.name = 'BotaApiError';
+    this.status = status;
+    this.code = error?.code;
+    this.param = error?.param;
+    this.requestId = error?.request_id;
+  }
 }
 
 export class BotaClient {
@@ -33,16 +52,19 @@ export class BotaClient {
         'Content-Type': 'application/json',
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (res.status === 204) return undefined as T;
 
-    const data = await res.json() as Record<string, unknown>;
+    const data = await res.json().catch(() => undefined) as Record<string, unknown> | undefined;
 
     if (!res.ok) {
-      const err = data['error'] as { message?: string } | undefined;
-      throw new Error(err?.message ?? `HTTP ${res.status}`);
+      throw new BotaApiError(res.status, data?.['error'] as ConstructorParameters<typeof BotaApiError>[1]);
     }
+
+    if (data === undefined) throw new Error(`HTTP ${res.status}: expected a JSON response`);
 
     return data as T;
   }
@@ -65,35 +87,28 @@ export class BotaClient {
 }
 
 export async function callMcpTool(apiUrl: string, apiKey: string, toolName: string, args: Record<string, unknown>): Promise<string> {
-  const res = await fetch(`${apiUrl}/mcp`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: { name: toolName, arguments: args },
-    }),
+  const client = new Client({ name: 'bota-cli', version: '0.1.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${apiUrl.replace(/\/+$/, '')}/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${apiKey}` }, redirect: 'error' },
   });
-
-  const text = await res.text();
-
-  let jsonStr = text;
-  for (const line of text.split('\n')) {
-    if (line.startsWith('data:')) {
-      jsonStr = line.slice(5).trim();
-      break;
+  try {
+    await client.connect(transport);
+    const result = CallToolResultSchema.parse(await client.callTool({ name: toolName, arguments: args }, undefined, { timeout: 30_000 }));
+    const content = result.content.find(item => item.type === 'text');
+    const text = content?.type === 'text' ? content.text : JSON.stringify(result);
+    if (result.isError) throw new Error(text);
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      // Successful text-only tool results retain the existing string return shape.
     }
+    if (value && typeof value === 'object' && 'success' in value && value.success === false) {
+      const failed = value as { error?: string; status_code?: number };
+      throw new Error(failed.error ?? `Webhook delivery failed${failed.status_code ? ` (HTTP ${failed.status_code})` : ''}`);
+    }
+    return text;
+  } finally {
+    await client.close();
   }
-
-  const parsed = JSON.parse(jsonStr) as { result?: { content?: Array<{ text?: string }> } };
-  const content = parsed.result?.content;
-  if (Array.isArray(content) && content[0]?.text) {
-    return content[0].text;
-  }
-  return jsonStr;
 }

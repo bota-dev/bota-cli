@@ -7,6 +7,7 @@ import { registerWebhooks } from './commands/webhooks.js';
 import { registerListen } from './commands/listen.js';
 import { registerTrigger } from './commands/trigger.js';
 import { registerMcp } from './commands/mcp.js';
+import { printError } from './output.js';
 
 const program = new Command();
 
@@ -28,6 +29,6 @@ registerTrigger(program);
 registerMcp(program);
 
 program.parseAsync(process.argv).catch((e: unknown) => {
-  console.error((e as Error).message);
-  process.exit(1);
+  printError(e, Boolean(program.opts()['json']));
+  process.exitCode = 1;
 });

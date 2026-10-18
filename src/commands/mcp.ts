@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { BotaClient, callMcpTool } from '../client.js';
 import { getApiKey, getApiUrl } from '../config.js';
+import { WEBHOOK_MANAGEMENT_UNAVAILABLE } from './webhooks.js';
 
 function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -65,12 +66,13 @@ export function registerMcp(program: Command): void {
           description: 'List devices',
           inputSchema: {
             limit: z.number().optional(),
+            cursor: z.string().optional(),
             end_user_id: z.string().optional(),
           },
         },
-        async ({ limit, end_user_id }) => {
+        async ({ limit, cursor, end_user_id }) => {
           try {
-            return ok(await client.get('/v1/devices', { limit, end_user_id }));
+            return ok(await client.get('/v1/devices', { limit, cursor, end_user_id }));
           } catch (e) { return fail(e); }
         },
       );
@@ -107,14 +109,15 @@ export function registerMcp(program: Command): void {
           description: 'List recordings',
           inputSchema: {
             limit: z.number().optional(),
+            cursor: z.string().optional(),
             end_user_id: z.string().optional(),
             device_id: z.string().optional(),
             status: z.string().optional(),
           },
         },
-        async ({ limit, end_user_id, device_id, status }) => {
+        async ({ limit, cursor, end_user_id, device_id, status }) => {
           try {
-            return ok(await client.get('/v1/recordings', { limit, end_user_id, device_id, status }));
+            return ok(await client.get('/v1/recordings', { limit, cursor, end_user_id, device_id, status }));
           } catch (e) { return fail(e); }
         },
       );
@@ -180,11 +183,7 @@ export function registerMcp(program: Command): void {
           description: 'List webhooks',
           inputSchema: { limit: z.number().optional() },
         },
-        async ({ limit }) => {
-          try {
-            return ok(await client.get('/v1/webhooks', { limit }));
-          } catch (e) { return fail(e); }
-        },
+        async () => fail(new Error(WEBHOOK_MANAGEMENT_UNAVAILABLE)),
       );
 
       server.registerTool(
