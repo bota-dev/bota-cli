@@ -96,11 +96,19 @@ test('local integration forwarding strips unexpected material and sanitizes host
 });
 
 test('local integration forwarding retains safe hosted policy codes and status without raw messages', async t => {
-  const api = await hosted(t, () => ({ isError: true, content: [{ type: 'text', text: JSON.stringify({ error: { code: 'provider_route_not_approved', status: 409, message: 'HIPAA URL?key=MCP_SECRET', detail: 'MCP_SECRET' } }) }] }));
+  const cases = [
+    { code: 'provider_route_not_approved', status: 409, message: 'Credential testing is not approved for this project.' },
+    { code: 'rate_limit_exceeded', status: 429, message: 'The integration operation is rate limited. Retry after the limit resets.' },
+  ];
+  let current;
+  const api = await hosted(t, () => ({ isError: true, content: [{ type: 'text', text: JSON.stringify({ error: { ...current, message: 'HIPAA URL?key=MCP_SECRET', detail: 'MCP_SECRET' } }) }] }));
   const client = await connect(t, api.url);
-  const result = await client.callTool({ name: 'test_integration', arguments: { provider_type: 'asr', provider_name: 'deepgram' } });
-  assert.equal(result.isError, true);
-  assert.deepEqual(JSON.parse(result.content[0].text), { error: { code: 'provider_route_not_approved', status: 409, message: 'Credential testing is not approved for this project.' } });
-  assert.doesNotMatch(JSON.stringify(result), /MCP_SECRET|HIPAA URL/);
-  assert.equal(api.requests.filter(req => req.body && JSON.parse(req.body).method === 'tools/call').length, 1);
+  for (const expected of cases) {
+    current = expected;
+    const result = await client.callTool({ name: 'test_integration', arguments: { provider_type: 'asr', provider_name: 'deepgram' } });
+    assert.equal(result.isError, true);
+    assert.deepEqual(JSON.parse(result.content[0].text), { error: expected });
+    assert.doesNotMatch(JSON.stringify(result), /MCP_SECRET|HIPAA URL/);
+  }
+  assert.equal(api.requests.filter(req => req.body && JSON.parse(req.body).method === 'tools/call').length, 2);
 });

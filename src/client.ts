@@ -34,6 +34,7 @@ const integrationMessages = {
   expired_api_key: 'The project developer credential has expired.',
   insufficient_permissions: 'This credential does not grant the required integration scope.',
   resource_not_found: 'Integration not found in this project.',
+  rate_limit_exceeded: 'The integration operation is rate limited. Retry after the limit resets.',
   provider_route_not_approved: 'Credential testing is not approved for this project.',
   provider_credential_unavailable: 'The stored provider credential is unavailable.',
   idempotency_conflict: 'Reconcile the previous integration operation before attempting another write.',
@@ -59,7 +60,7 @@ export function safeIntegrationError(error: unknown): IntegrationError {
     try {
       const detail = JSON.parse(error.message)?.error as { code?: unknown; status?: unknown } | undefined;
       if (typeof detail?.code === 'string'
-        && ['invalid_request', 'invalid_api_key', 'insufficient_permissions', 'resource_not_found', 'provider_route_not_approved', 'provider_credential_unavailable'].includes(detail.code)
+        && ['invalid_request', 'invalid_api_key', 'insufficient_permissions', 'resource_not_found', 'rate_limit_exceeded', 'provider_route_not_approved', 'provider_credential_unavailable'].includes(detail.code)
         && typeof detail.status === 'number' && Number.isInteger(detail.status) && detail.status >= 400 && detail.status <= 599) {
         return new IntegrationError(detail.code as keyof typeof integrationMessages, detail.status);
       }

@@ -142,6 +142,8 @@ Failed related reads in local `get_recording` return `isError: true`; successful
 
 Five new local tools (`list_integrations`, `get_integration`, `test_integration`, `update_integration`, `delete_integration`) forward to the corresponding hosted tools. `update_integration` accepts only an ID and `is_enabled`; no integration tool accepts a provider key. Local schemas reject extra fields and return fixed validation errors. Safe hosted credential-test results retain their `success` value and code, including failed basic checks. Hosted authorization still controls every operation; local tool visibility does not imply that the current credential can invoke it. Existing local tools retain their compatibility behavior.
 
+Safe integration rate-limit errors retain `rate_limit_exceeded` and HTTP 429 with a fixed message. The local bridge makes no automatic retry and does not echo provider error text.
+
 ## Global flags
 
 | Flag | Description |
