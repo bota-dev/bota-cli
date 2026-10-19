@@ -146,4 +146,3 @@ test('hosted initialize and invocation share one total deadline rather than rece
   assertPrivate(cli);
   assert.deepEqual(await cli.stop('EOF'), [0, null]);
 });
-
