@@ -125,10 +125,11 @@ Use an existing webhook ID from Bota Platform. The command calls the hosted MCP 
 
 ### MCP server
 
-Start the existing local MCP tools for AI assistants:
+Start the existing local MCP tools for AI assistants (the default `legacy` mode):
 
 ```bash
 bota mcp
+bota mcp --mode legacy
 
 # Add to Claude Code
 claude mcp add bota -- bota mcp
@@ -136,13 +137,32 @@ claude mcp add bota -- bota mcp
 
 The local server has curated tools for end-user/device/recording reads, transcription and summary requests, and explicit webhook tests. It does not expose every CLI command. `list_webhooks` remains registered for compatibility but returns the Platform-only error locally. Device and recording list tools accept an optional cursor. Local `list_recordings` also accepts `start_date` and `end_date` with the creation-date semantics above.
 
-This repair retains the 0.1 local tool output shapes and transcription defaults. It does not replace the server with hosted forwarding: external-ID `get_end_user` still returns a page envelope, `get_recording` stays flattened with optional nested transcription/summary, and omitted transcription language remains omitted. A future versioned migration is required to change those contracts.
+Legacy mode retains all 16 local tools, their 0.1 output shapes, and transcription defaults: external-ID `get_end_user` still returns a page envelope, `get_recording` stays flattened with optional nested transcription/summary, and omitted transcription language remains omitted. A future versioned migration is required to change those contracts.
 
 Failed related reads in local `get_recording` return `isError: true`; successful empty lists retain the existing flattened success shape. Local errors retain their first text message and add a second JSON text block when structured HTTP diagnostics are available.
 
 Five new local tools (`list_integrations`, `get_integration`, `test_integration`, `update_integration`, `delete_integration`) forward to the corresponding hosted tools. `update_integration` accepts only an ID and `is_enabled`; no integration tool accepts a provider key. Local schemas reject extra fields and return fixed validation errors. Safe hosted credential-test results retain their `success` value and code, including failed basic checks. Hosted authorization still controls every operation; local tool visibility does not imply that the current credential can invoke it. Existing local tools retain their compatibility behavior.
 
 Safe integration rate-limit errors retain `rate_limit_exceeded` and HTTP 429 with a fixed message. The local bridge makes no automatic retry and does not echo provider error text.
+
+#### Hosted discovery preview
+
+Select the explicit hosted mode to use the authenticated backend's current tool inventory and contracts:
+
+```bash
+bota mcp --mode hosted
+
+# Add a separate connection to Claude Code
+claude mcp add bota-hosted -- bota mcp --mode hosted
+```
+
+Run `bota auth login` separately first, or supply `BOTA_API_KEY`. Startup is noninteractive and makes no network requests. Hosted mode uses the selected API base URL's `/mcp` endpoint and captures the credential and API URL once; restart the process after changing credentials or environment. Unknown modes and invalid API URLs fail locally. Package publication and availability of a matching hosted deployment remain separate from this source preview.
+
+`tools/list` forwards the hosted principal's inventory, tool schemas, descriptions, and effect annotations. Project API keys, restricted-key scopes, and end-user tokens can receive different inventories. Each requested page is fetched afresh; clients follow `nextCursor` to request the next page. There is no inventory cache or list-change notification. Refresh the tool list or restart the bridge to see inventory changes. Every invocation independently passes current hosted authorization, even if a previously listed tool is no longer allowed.
+
+`tools/call` preserves the complete final hosted result, including every content block, `structuredContent`, `_meta`, and `isError`. Hosted mode has different contracts from legacy mode and never falls back to legacy tools. This preview supports tool listing and final call results only. Progress and list-change notifications, resources, prompts, tasks, sampling, and elicitation are outside its supported capabilities. It does not forward interactive callbacks or open browser login prompts. Hosted business results retain their owning output and secret-handling contracts; the bridge does not sanitize arbitrary tool content.
+
+Each list or call uses a fresh official MCP client connection with one total 30-second deadline for initialization and execution. Redirects, reconnect/resumption, and automatic retries are disabled; an invocation sends at most one upstream tool call. Transport failures return fixed diagnostics without reflecting HTTP bodies, URLs, or credentials. Cancellation, stdin closure, Ctrl+C, and SIGTERM abort active HTTP requests and join request cleanup. The SDK closes and aborts its transport without exposing a separate reader-join promise. Local cancellation or a lost response cannot prove a remote operation stopped or rolled back. Its outcome may be unknown: inspect the owning resource before deciding whether to retry.
 
 ## Global flags
 
@@ -187,4 +207,4 @@ npm test
 npm run build
 ```
 
-Contract regressions use loopback fixtures and synthetic credentials. They exercise real command parsing/exit codes, backend request fields, page cursors, MCP JSON/SSE errors and local-tool compatibility. Manual-listener subprocess tests verify HMAC signatures over the original body and `X-Bota-Signature`, `X-Bota-Timestamp`, and `X-Bota-Event-Id` forwarding, credential-free startup, fixed logs, rejection paths, and joined SIGINT/SIGTERM handlers. On Windows, a test-only IPC relay delivers those signals inside the subprocess. No test contacts Bota Platform or creates a public tunnel. These checks do not call a live project, establish webhook-management availability, publish a package, or qualify a physical device.
+Contract regressions use loopback fixtures and synthetic credentials. They exercise real command parsing/exit codes, backend request fields, page cursors, MCP JSON/SSE errors and local-tool compatibility. Hosted-preview fixtures cover principal-dependent discovery, full result/schema preservation, fresh admission, redirects, cancellation, shutdown, a real 30-second deadline, and one attempted tool invocation after a lost response. Manual-listener subprocess tests verify HMAC signatures over the original body and `X-Bota-Signature`, `X-Bota-Timestamp`, and `X-Bota-Event-Id` forwarding, credential-free startup, fixed logs, rejection paths, and joined SIGINT/SIGTERM handlers. On Windows, a test-only IPC relay delivers those signals inside the subprocess. No test contacts Bota Platform or creates a public tunnel. These checks do not call a live project, establish webhook-management availability, publish a package, or qualify a physical device.

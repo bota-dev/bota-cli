@@ -7,6 +7,7 @@ import { getApiKey, getApiUrl } from '../config.js';
 import { WEBHOOK_MANAGEMENT_UNAVAILABLE } from './webhooks.js';
 import { errorDetails } from '../output.js';
 import { registerIntegrationMcpTools } from './integration-mcp.js';
+import { startHostedMcp } from './hosted-mcp.js';
 
 function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -23,10 +24,13 @@ export function registerMcp(program: Command): void {
   program
     .command('mcp')
     .description('Start a local MCP server for IDE integration')
-    .action(async () => {
+    .option('--mode <mode>', 'legacy local tools or explicit hosted canonical tools', 'legacy')
+    .action(async (opts: { mode: string }) => {
+      if (opts.mode !== 'legacy' && opts.mode !== 'hosted') throw new Error('--mode must be legacy or hosted.');
       const globalOpts = program.opts();
       const apiKey = getApiKey();
       const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
+      if (opts.mode === 'hosted') { await startHostedMcp(apiUrl, apiKey); return; }
       const client = new BotaClient({ apiKey, apiUrl });
 
       const server = new McpServer({ name: 'bota', version: '0.1.0' });
