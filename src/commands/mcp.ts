@@ -6,6 +6,7 @@ import { BotaClient, callMcpTool } from '../client.js';
 import { getApiKey, getApiUrl } from '../config.js';
 import { WEBHOOK_MANAGEMENT_UNAVAILABLE } from './webhooks.js';
 import { errorDetails } from '../output.js';
+import { registerIntegrationMcpTools } from './integration-mcp.js';
 
 function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -29,6 +30,7 @@ export function registerMcp(program: Command): void {
       const client = new BotaClient({ apiKey, apiUrl });
 
       const server = new McpServer({ name: 'bota', version: '0.1.0' });
+      registerIntegrationMcpTools(server, apiUrl, apiKey);
 
       server.registerTool(
         'list_end_users',

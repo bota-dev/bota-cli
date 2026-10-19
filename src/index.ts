@@ -7,6 +7,7 @@ import { registerWebhooks } from './commands/webhooks.js';
 import { registerListen } from './commands/listen.js';
 import { registerTrigger } from './commands/trigger.js';
 import { registerMcp } from './commands/mcp.js';
+import { registerIntegrations } from './commands/integrations.js';
 import { printError } from './output.js';
 
 const program = new Command();
@@ -27,6 +28,7 @@ registerWebhooks(program);
 registerListen(program);
 registerTrigger(program);
 registerMcp(program);
+registerIntegrations(program);
 
 program.parseAsync(process.argv).catch((e: unknown) => {
   printError(e, Boolean(program.opts()['json']));

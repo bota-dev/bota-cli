@@ -50,17 +50,18 @@ export async function isolatedEnvironment(t, apiUrl) {
   };
 }
 
-export async function runCli(t, apiUrl, args) {
+export async function runCli(t, apiUrl, args, input) {
   const env = await isolatedEnvironment(t, apiUrl);
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', '--api-url', apiUrl, ...args], {
     cwd: workspace,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
   });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', data => { stdout += data; });
   child.stderr.on('data', data => { stderr += data; });
+  if (child.stdin) { child.stdin.on('error', () => undefined); child.stdin.end(input); }
   const timer = setTimeout(() => child.kill(), 12_000);
   try {
     const [code, signal] = await once(child, 'close');

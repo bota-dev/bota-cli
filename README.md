@@ -70,6 +70,31 @@ Recording lists also expose `--device`, `--status`, `--start-date`, and `--end-d
 
 Summaries require exactly one of `--template` and `--prompt`. The four built-in aliases (`general_notes`, `sales_call`, `clinical_soap`, `legal_memo`) map to their `tmpl_` IDs; an exact template ID also works. Prompts must contain 10–10000 characters. A requested transcription/summary reports its actual job state; it does not mean processing has completed.
 
+### Provider integrations
+
+```bash
+bota integrations list
+bota integrations get asr deepgram
+
+# provider-key is an existing protected file containing one provider key line
+bota integrations set asr deepgram --key-stdin < provider-key
+bota integrations rotate <integration-uuid> --key-stdin < provider-key
+
+bota integrations enable <integration-uuid>
+bota integrations disable <integration-uuid>
+bota integrations delete <integration-uuid>
+bota integrations delete-provider asr deepgram
+bota integrations test asr deepgram --json
+```
+
+You can also pipe a key from your secret manager into `set` or `rotate`. Key input is stdin only: one nonempty UTF-8 line, optionally ending in LF/CRLF, no whitespace/control characters, at most 16 KiB, with EOF within 30 seconds. Interactive entry and key arguments are rejected. Provider keys are not saved in the CLI configuration or printed in tables, JSON, or error messages.
+
+`set` creates or replaces the credential and enables the integration. `rotate` replaces the credential by UUID while retaining the existing enabled state. Supported provider pairs are ASR `whisper`, `deepgram`, `assemblyai`, `elevenlabs`, and LLM `gemini`, `openai`, `claude`. Read operations require `integrations:read`; changes and credential tests require `integrations:write` for restricted keys. End-user tokens do not gain integration-management authority.
+
+Outputs contain validated metadata and `has_error`; raw `last_error`, credential hints, encrypted material, and provider errors are excluded. Integration errors use fixed safe messages and available HTTP status/code. A credential test uses only the stored key and may consume provider capacity. It checks basic provider acceptance, without qualifying transcription, summarization, or regulated-route approval. A failed check prints a safe result with `success: false` and exits nonzero. Tests and writes are attempted once, without automatic replay.
+
+These commands use typed methods in the private CLI client. No standalone Bota API SDK is released by this change. Source changes, matching backend deployment, and CLI package publication remain separate.
+
 ### Webhooks
 
 Create and inspect webhook endpoints in Bota Platform. The public API does not mount webhook registration, list, detail, or deletion routes. `bota webhooks list` and `bota webhooks get <id>` fail locally with that explanation instead of making a request to an unavailable route.
@@ -114,6 +139,8 @@ The local server has curated tools for end-user/device/recording reads, transcri
 This repair retains the 0.1 local tool output shapes and transcription defaults. It does not replace the server with hosted forwarding: external-ID `get_end_user` still returns a page envelope, `get_recording` stays flattened with optional nested transcription/summary, and omitted transcription language remains omitted. A future versioned migration is required to change those contracts.
 
 Failed related reads in local `get_recording` return `isError: true`; successful empty lists retain the existing flattened success shape. Local errors retain their first text message and add a second JSON text block when structured HTTP diagnostics are available.
+
+Five new local tools (`list_integrations`, `get_integration`, `test_integration`, `update_integration`, `delete_integration`) forward to the corresponding hosted tools. `update_integration` accepts only an ID and `is_enabled`; no integration tool accepts a provider key. Local schemas reject extra fields and return fixed validation errors. Safe hosted credential-test results retain their `success` value and code, including failed basic checks. Hosted authorization still controls every operation; local tool visibility does not imply that the current credential can invoke it. Existing local tools retain their compatibility behavior.
 
 ## Global flags
 
