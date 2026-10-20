@@ -41,7 +41,44 @@ bota auth logout
 
 Status output excludes key material, key hints, and API URLs. Status rendering escapes C0, DEL, C1, and direction/line controls in opaque identifiers and scope strings; JSON parsing preserves the exact stored values. `--json` writes success to stdout; failures use a fixed `error` object on stderr and exit nonzero. Invalid credentials (401), unsupported credential authority (403), organization quarantine (423), rate limiting (429), service failures, malformed responses, and connectivity failures are distinguished. A temporary service failure does not establish that a credential is invalid. The command never falls back to a business read or retries the check.
 
-This bounded status change preserves the existing selection order: a saved configuration key takes precedence over `BOTA_API_KEY`. With no saved key, inject a restricted key through `BOTA_API_KEY`; direct `auth login <key>` retains its existing secret-key format check. Status does not rewrite configuration, change login/logout, introduce delegated OAuth or secure profiles, or change the selected API origin. A matching backend identity endpoint is required; source delivery, backend deployment, and CLI publication remain separate.
+Without `--profile`, the existing selection order remains: a saved configuration key takes precedence over `BOTA_API_KEY`. With no saved key, inject a restricted key through `BOTA_API_KEY`; direct `auth login <key>` retains its existing secret-key format check and plaintext storage behavior. Status does not rewrite that configuration or introduce delegated OAuth. A matching backend identity endpoint is required; source delivery, backend deployment, and CLI publication remain separate.
+
+### Environment-backed profiles in the source preview
+
+Explicit profiles bind an injected key to an API origin, project and organization.
+Supply `BOTA_API_KEY` through your shell or CI secret manager, then enroll the
+trusted origin explicitly:
+
+```bash
+bota --api-url https://api.bota.dev auth profiles add work --from-env
+bota auth profiles list --json
+bota --profile work auth status --json
+bota --profile work recordings list
+bota --profile work mcp --mode hosted
+bota auth profiles remove work
+```
+
+Profiles store metadata only in `~/.bota/profiles/`; they never save the key,
+key hints, scopes or a credential hash. Creation verifies the current identity
+and refuses an existing name. Each selected cloud command verifies the injected
+key against the saved project and organization before proceeding. Both local
+MCP modes use that same verified startup context. `BOTA_API_URL` or `--api-url`
+may only repeat the saved origin; a conflicting origin refuses before key
+resolution or a request. HTTP is restricted to literal loopback addresses and
+requires `--allow-http-loopback` during enrollment for development.
+
+With `--profile`, `BOTA_API_KEY` is required. Missing, empty, invalid or rejected
+keys never fall back to legacy saved credentials, browser login or another
+profile. The legacy login/logout commands refuse `--profile`; list/remove need
+no key or network access, and removal does not revoke an API key. A running MCP
+process keeps its verified startup key and profile: restart it to use changed
+environment or metadata. Removing metadata does not stop that process or
+revoke backend access. Backend admission still applies to every operation.
+
+This first profile cohort provides no native credential storage, automatic
+legacy migration, default profile selection or Platform OAuth. Existing
+no-profile commands retain their compatibility behavior. Local help and the
+manual webhook listener remain independent of credentials.
 
 ## Commands
 
@@ -175,7 +212,11 @@ bota mcp --mode hosted
 claude mcp add bota-hosted -- bota mcp --mode hosted
 ```
 
-Run `bota auth login` separately first, or supply `BOTA_API_KEY`. Startup is noninteractive and makes no network requests. Hosted mode uses the selected API base URL's `/mcp` endpoint and captures the credential and API URL once; restart the process after changing credentials or environment. Unknown modes and invalid API URLs fail locally. Package publication and availability of a matching hosted deployment remain separate from this source preview.
+Run `bota auth login` separately first, supply `BOTA_API_KEY`, or explicitly select an environment profile. Startup is noninteractive. Hosted mode uses the selected API base URL's `/mcp` endpoint and captures the credential and API URL once; restart the process after changing credentials or environment. Unknown modes and invalid API URLs fail locally. Package publication and availability of a matching hosted deployment remain separate from this source preview.
+
+Without `--profile`, bridge startup makes no network request. An explicit
+environment profile first verifies developer identity before connecting stdio;
+it supports project keys rather than end-user tokens.
 
 `tools/list` forwards the hosted principal's inventory, tool schemas, descriptions, and effect annotations. Project API keys, restricted-key scopes, and end-user tokens can receive different inventories. Each requested page is fetched afresh; clients follow `nextCursor` to request the next page. There is no inventory cache or list-change notification. Refresh the tool list or restart the bridge to see inventory changes. Every invocation independently passes current hosted authorization, even if a previously listed tool is no longer allowed.
 
@@ -230,8 +271,9 @@ npm run verify:package
 
 `verify:package` creates a tarball and receipt under `.release/`, resolves an
 isolated consumer lock, and installs it with `npm ci --ignore-scripts`. It runs
-the installed command's version/help, hosted-mode help, and one synthetic
-loopback identity read. It uses temporary homes and npm configuration with
+the installed command's version/help, hosted-mode help, legacy identity read,
+profile enrollment/status and credential-free metadata list/removal against
+synthetic loopback fixtures. It uses temporary homes and npm configuration with
 inherited credentials removed. The root dependency lock remains unchanged.
 The package includes the executable, manifest, README, build/source metadata,
 and third-party notices; source tests, CI configuration and internal reviews

@@ -1,10 +1,29 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { ProjectIdentity } from './client.js';
 
 const CONFIG_DIR = join(homedir(), '.bota');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const DEFAULT_API_URL = 'https://api.bota.dev';
+
+interface ProfileContext {
+  apiKey: string;
+  apiUrl: string;
+  identity: ProjectIdentity;
+}
+
+// A selected profile is resolved once before its command. It never reads or
+// updates the legacy credential file, and it is not a saved default selection.
+let profileContext: Readonly<ProfileContext> | undefined;
+
+export function setProfileContext(context: ProfileContext): void {
+  profileContext = Object.freeze({ ...context });
+}
+
+export function getProfileContext(): Readonly<ProfileContext> | undefined {
+  return profileContext;
+}
 
 interface Config {
   apiKey?: string;
@@ -25,6 +44,7 @@ export function writeConfig(config: Config): void {
 }
 
 export function getApiKey(): string {
+  if (profileContext) return profileContext.apiKey;
   const config = readConfig();
   const key = config.apiKey ?? process.env['BOTA_API_KEY'];
   if (!key) {
@@ -35,6 +55,7 @@ export function getApiKey(): string {
 }
 
 export function getApiUrl(override?: string): string {
+  if (profileContext) return profileContext.apiUrl;
   if (override) return override;
   if (process.env['BOTA_API_URL']) return process.env['BOTA_API_URL'];
   const config = readConfig();

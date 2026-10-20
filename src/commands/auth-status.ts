@@ -1,4 +1,4 @@
-import { BotaApiError, BotaClient, BotaResponseError } from '../client.js';
+import { BotaApiError, BotaClient, BotaResponseError, type ProjectIdentity } from '../client.js';
 import { printError } from '../output.js';
 
 const messages = {
@@ -32,10 +32,10 @@ function safeStatusJson(value: unknown, pretty = false): string {
       character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
-export async function showAuthStatus(options: { apiKey?: string; apiUrl: string; json: boolean }): Promise<void> {
+export async function showAuthStatus(options: { apiKey?: string; apiUrl: string; json: boolean; identity?: ProjectIdentity }): Promise<void> {
   try {
-    if (!options.apiKey) throw new AuthStatusError('not_authenticated');
-    const identity = await new BotaClient({ apiKey: options.apiKey, apiUrl: options.apiUrl }).getProjectIdentity();
+    if (!options.identity && !options.apiKey) throw new AuthStatusError('not_authenticated');
+    const identity = options.identity ?? await new BotaClient({ apiKey: options.apiKey, apiUrl: options.apiUrl }).getProjectIdentity();
     if (options.json) { console.log(safeStatusJson(identity, true)); return; }
     console.log('Authenticated project developer credential.');
     // The identifiers are opaque and stored scopes may contain arbitrary strings.

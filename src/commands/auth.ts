@@ -1,11 +1,11 @@
 import { Command } from 'commander';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readConfig, writeConfig, getApiUrl, getDashboardUrl } from '../config.js';
+import { readConfig, writeConfig, getApiUrl, getDashboardUrl, getProfileContext } from '../config.js';
 import { ok, info } from '../output.js';
 import { showAuthStatus } from './auth-status.js';
 
-export function registerAuth(program: Command): void {
+export function registerAuth(program: Command): Command {
   const auth = program.command('auth').description('Manage authentication');
 
   auth
@@ -110,10 +110,16 @@ export function registerAuth(program: Command): void {
     .description('Show current auth status')
     .action(async () => {
       const globalOpts = program.opts();
+      const context = getProfileContext();
+      if (context) {
+        await showAuthStatus({ ...context, json: Boolean(globalOpts['json']) });
+        return;
+      }
       const config = readConfig();
       const key = config.apiKey ?? process.env['BOTA_API_KEY'];
 
       const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
       await showAuthStatus({ apiKey: key, apiUrl, json: Boolean(globalOpts['json']) });
     });
+  return auth;
 }

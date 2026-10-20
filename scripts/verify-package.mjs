@@ -79,6 +79,22 @@ try {
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const result = await cli(['--api-url', `http://127.0.0.1:${server.address().port}`, 'auth', 'status', '--json'], { BOTA_API_KEY: 'rk_SYNTHETIC_RELEASE_FIXTURE' });
   assert.deepEqual(JSON.parse(result.stdout), identity); assert.equal(result.stderr, ''); assert.deepEqual(calls, ['/v1/auth/identity']);
+  const profileOrigin = `http://127.0.0.1:${server.address().port}`;
+  const keyEnvironment = { BOTA_API_KEY: 'rk_SYNTHETIC_RELEASE_FIXTURE' };
+  const enrollment = await cli(['--api-url', profileOrigin, 'auth', 'profiles', 'add', 'installed', '--from-env', '--allow-http-loopback'], keyEnvironment);
+  const metadata = JSON.parse(enrollment.stdout);
+  assert.deepEqual(metadata, { name: 'installed', format_version: 1, api_origin: profileOrigin,
+    project_id: identity.project_id, organization_id: identity.organization_id,
+    credential_source: 'environment', allow_http_loopback: true });
+  assert.equal(enrollment.stderr, '');
+  const profileStatus = await cli(['--profile', 'installed', 'auth', 'status', '--json'], keyEnvironment);
+  assert.deepEqual(JSON.parse(profileStatus.stdout), identity); assert.equal(profileStatus.stderr, '');
+  assert.equal(calls.length, 3, 'one legacy status, enrollment, and selected profile status identity request');
+  assert.deepEqual(JSON.parse((await cli(['auth', 'profiles', 'list', '--json'])).stdout), [metadata]);
+  const beforeRemoval = calls.length;
+  assert.deepEqual(JSON.parse((await cli(['auth', 'profiles', 'remove', 'installed'])).stdout), { removed: true });
+  assert.equal(calls.length, beforeRemoval, 'metadata list/removal must not contact the API');
+  assert.deepEqual(JSON.parse((await cli(['auth', 'profiles', 'list', '--json'])).stdout), []);
   const consumerLock = JSON.parse(frozenLock);
   for (const [name, version] of Object.entries(pkg.dependencies)) assert.equal(consumerLock.packages[`node_modules/${name}`]?.version, version);
   await run(process.execPath, [join(root, 'scripts/check-licenses.mjs'), join(consumer, 'node_modules')]);
@@ -92,7 +108,9 @@ try {
     node: process.version, npm: (await npm(['--version'])).stdout.trim(),
     consumer_environment_keys: Object.keys(env).sort(),
     consumer_lock_sha256: createHash('sha256').update(frozenLock).digest('hex'), resolved_dependencies: resolved,
-    checks: ['installed-version', 'source-version', 'installed-help', 'installed-hosted-mode-help', 'synthetic-empty-scope-identity', 'frozen-consumer-lock', 'installed-provenance', 'bundle-and-input-hashes', 'direct-runtime-versions', 'consumer-dependency-licenses'] };
+    checks: ['installed-version', 'source-version', 'installed-help', 'installed-hosted-mode-help', 'synthetic-empty-scope-identity',
+      'installed-environment-profile-enrollment', 'installed-profile-status-one-preflight', 'installed-profile-local-list-removal',
+      'frozen-consumer-lock', 'installed-provenance', 'bundle-and-input-hashes', 'direct-runtime-versions', 'consumer-dependency-licenses'] };
   await writeFile(join(artifact, 'package-receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`);
   console.log(`Packed consumer passed: ${pkg.name}@${pkg.version}; ${packed.files.length} package files. Publication remains ${provenance.publication_blockers.length ? 'BLOCKED (see receipt)' : 'subject to separate exact-source approval'}.`);
 } finally {

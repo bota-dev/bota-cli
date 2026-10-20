@@ -19,6 +19,24 @@ export interface ProjectIdentity {
   scopes: string[] | null;
 }
 
+// Decode only the existing seven-field project-key contract. Callers own
+// transport bounds and any origin/project binding; this grants no authority.
+export function parseProjectIdentity(value: unknown): ProjectIdentity {
+  const data = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  if (typeof data.project_id !== 'string' || typeof data.organization_id !== 'string' || typeof data.key_id !== 'string'
+    || typeof data.is_test_mode !== 'boolean'
+    || !(data.key_type === 'secret' && data.scope_mode === 'project_secret' && data.scopes === null
+      || data.key_type === 'restricted' && data.scope_mode === 'restricted' && Array.isArray(data.scopes)
+        && data.scopes.every(scope => typeof scope === 'string'))) {
+    throw new BotaResponseError(undefined, 'unexpected identity response');
+  }
+  return {
+    project_id: data.project_id, organization_id: data.organization_id, key_id: data.key_id,
+    key_type: data.key_type as ProjectIdentity['key_type'], is_test_mode: data.is_test_mode,
+    scope_mode: data.scope_mode as ProjectIdentity['scope_mode'], scopes: data.scopes === null ? null : [...data.scopes as string[]],
+  };
+}
+
 export class BotaResponseError extends Error {
   constructor(readonly status?: number, detail = 'expected a JSON response') {
     super(status === undefined ? detail : `HTTP ${status}: ${detail}`);
@@ -245,20 +263,7 @@ export class BotaClient {
   }
 
   async getProjectIdentity(): Promise<ProjectIdentity> {
-    const value = await this.get<unknown>('/v1/auth/identity');
-    const data = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-    if (typeof data.project_id !== 'string' || typeof data.organization_id !== 'string' || typeof data.key_id !== 'string'
-      || typeof data.is_test_mode !== 'boolean'
-      || !(data.key_type === 'secret' && data.scope_mode === 'project_secret' && data.scopes === null
-        || data.key_type === 'restricted' && data.scope_mode === 'restricted' && Array.isArray(data.scopes)
-          && data.scopes.every(scope => typeof scope === 'string'))) {
-      throw new BotaResponseError(undefined, 'unexpected identity response');
-    }
-    return {
-      project_id: data.project_id, organization_id: data.organization_id, key_id: data.key_id,
-      key_type: data.key_type as ProjectIdentity['key_type'], is_test_mode: data.is_test_mode,
-      scope_mode: data.scope_mode as ProjectIdentity['scope_mode'], scopes: data.scopes === null ? null : [...data.scopes as string[]],
-    };
+    return parseProjectIdentity(await this.get<unknown>('/v1/auth/identity'));
   }
 
   private async integrationRequest<T>(method: string, path: string, body: unknown, decode: (value: unknown) => T): Promise<T> {
