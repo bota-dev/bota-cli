@@ -1,14 +1,11 @@
-name: Publish
+name: Publish preview
 
 on:
-  release:
-    types: [published]
   push:
     tags:
-      - 'v*'
+      - 'v0.2.0-beta.*'
 
 permissions:
-  id-token: write   # OIDC for npmjs trusted publisher
   contents: read
 
 env:
@@ -17,12 +14,22 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: npm-cli-preview
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLI_PREVIEW_PUBLICATION_APPROVAL: ${{ vars.CLI_PREVIEW_PUBLICATION_APPROVAL }}
+      CLI_SOURCE_LICENSE_APPROVAL: ${{ vars.CLI_SOURCE_LICENSE_APPROVAL }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js (npmjs.org)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
@@ -33,8 +40,30 @@ jobs:
       - name: Type check
         run: npm run type-check
 
-      - name: Build
-        run: npm run build
+      - name: Contract and release-policy regressions
+        run: npm test
 
-      - name: Publish to npmjs.org
-        run: npm publish --access public
+      - name: Dependency licenses
+        run: npm run license-check
+
+      - name: Prepare and verify the installed candidate
+        run: npm run verify:package
+
+      - name: Require exact-source license and publication approvals
+        run: npm run check:publication
+
+      - name: Publish the inspected tarball to beta with provenance
+        shell: bash
+        run: |
+          tarball=$(node -e "process.stdout.write(require('./.release/package-receipt.json').filename)")
+          npm publish ".release/$tarball" --access public --tag beta --provenance --ignore-scripts
+
+      - name: Retain the exact candidate and verification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-preview-${{ github.sha }}
+          path: |
+            .release/*.tgz
+            .release/package-receipt.json
+            .release/consumer/*.json
+          if-no-files-found: error

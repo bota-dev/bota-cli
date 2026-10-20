@@ -1,7 +1,14 @@
 {
   "name": "@bota.dev/cli",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.0",
+  "description": "Bota developer CLI and local MCP tooling",
+  "repository": { "type": "git", "url": "git+https://github.com/bota-dev/bota-cli.git" },
+  "homepage": "https://docs.bota.dev/cli",
+  "bugs": { "url": "https://github.com/bota-dev/bota-cli/issues" },
   "type": "module",
+  "engines": { "node": ">=22.23.2" },
+  "packageManager": "npm@11.17.0",
+  "files": ["dist/index.js", "dist/release.json", "dist/THIRD_PARTY_NOTICES.txt", "README.md", "LICENSE"],
   "bin": {
     "bota": "./dist/index.js"
   },
@@ -10,18 +17,24 @@
     "dev": "tsx src/index.ts",
     "type-check": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.mjs",
-    "prepublishOnly": "npm run build"
+    "prepack": "tsup && node scripts/package-provenance.mjs",
+    "verify:package": "tsup && node scripts/package-provenance.mjs && node scripts/verify-package.mjs",
+    "smoke:package": "node scripts/verify-package.mjs",
+    "check:publication": "node scripts/check-publication.mjs",
+    "license-check": "node scripts/check-licenses.mjs",
+    "prepublishOnly": "node scripts/check-publication.mjs"
   },
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10",
-    "chalk": "^5",
-    "cli-table3": "^0.6",
-    "commander": "^12",
-    "localtunnel": "^2",
-    "open": "^10.2.0"
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "chalk": "5.6.2",
+    "cli-table3": "0.6.5",
+    "commander": "12.1.0",
+    "localtunnel": "2.0.2",
+    "open": "10.2.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/localtunnel": "^2.0.4",

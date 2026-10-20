@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { createRequire } from 'node:module';
 import { registerAuth } from './commands/auth.js';
 import { registerEndUsers } from './commands/end-users.js';
 import { registerDevices } from './commands/devices.js';
@@ -11,11 +12,12 @@ import { registerIntegrations } from './commands/integrations.js';
 import { printError } from './output.js';
 
 const program = new Command();
+const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 
 program
   .name('bota')
   .description('Bota developer CLI')
-  .version('0.1.0')
+  .version(version)
   .option('--api-url <url>', 'Override API base URL')
   .option('--dashboard-url <url>', 'Override dashboard/portal URL')
   .option('--json', 'Output raw JSON');

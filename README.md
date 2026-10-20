@@ -4,9 +4,21 @@ Official CLI for the [Bota](https://bota.dev) developer platform. Manage support
 
 ## Installation
 
+The current public npm `latest` is **0.1.0**, published May 25, 2026. It does not
+contain the source-preview workflows described below. The prepared candidate
+is **0.2.0-beta.0**, requires Node **22.23.2 or newer**, and is **not published**.
+Its source-license decision is unresolved, which blocks publication. Packaging
+and synthetic tests do not authorize a license grant or registry release.
+
+To install the historical public version:
+
 ```bash
-npm install -g @bota.dev/cli
+npm install -g @bota.dev/cli@0.1.0
 ```
+
+Candidate packaging and release requirements are recorded in the
+[preview release review](https://github.com/bota-dev/bota-cli/blob/main/docs/reviews/2026-10-19-cli-preview-release.md).
+Any future preview publication uses `beta`; it must not move `latest`.
 
 ## Authentication
 
@@ -212,6 +224,25 @@ npm ci
 npm run type-check
 npm test
 npm run build
+npm run license-check
+npm run verify:package
 ```
+
+`verify:package` creates a tarball and receipt under `.release/`, resolves an
+isolated consumer lock, and installs it with `npm ci --ignore-scripts`. It runs
+the installed command's version/help, hosted-mode help, and one synthetic
+loopback identity read. It uses temporary homes and npm configuration with
+inherited credentials removed. The root dependency lock remains unchanged.
+The package includes the executable, manifest, README, build/source metadata,
+and third-party notices; source tests, CI configuration and internal reviews
+are excluded. The candidate metadata records source dirtiness honestly.
+Transitive dependency ranges are not globally frozen for future consumers;
+the receipt records the exact graph used by this installed-consumer check.
+
+The publication guard requires an approved source license and `LICENSE`, a
+clean source commit matching `GITHUB_SHA`, a matching `v0.2.0-beta.N` tag and
+package version, and exact-source repository approval variables. It publishes
+the already-tested tarball with provenance. No tag, release, dispatch, registry
+publication or production action is part of preparing this candidate.
 
 Contract regressions use loopback fixtures and synthetic credentials. They exercise real command parsing/exit codes, backend request fields, page cursors, MCP JSON/SSE errors and local-tool compatibility. Hosted-preview fixtures cover principal-dependent discovery, full result/schema preservation, fresh admission, redirects, cancellation, shutdown, a real 30-second deadline, and one attempted tool invocation after a lost response. Manual-listener subprocess tests verify HMAC signatures over the original body and `X-Bota-Signature`, `X-Bota-Timestamp`, and `X-Bota-Event-Id` forwarding, credential-free startup, fixed logs, rejection paths, and joined SIGINT/SIGTERM handlers. On Windows, a test-only IPC relay delivers those signals inside the subprocess. No test contacts Bota Platform or creates a public tunnel. These checks do not call a live project, establish webhook-management availability, publish a package, or qualify a physical device.
