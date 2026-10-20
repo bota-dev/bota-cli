@@ -55,6 +55,14 @@ packed readbacks, source identity and hosted CI. The unavailable dedicated
 workflow-validator skill/actionlint is not claimed as run; local YAML parsing
 and structural checks plus independent workflow review cover the saved files.
 
+Exact source `89c5e3c` passed hosted types, 80 regressions, dependency licenses
+and the installed candidate check in run `39361611935`. Its final artifact
+upload failed because the default uploader excludes the hidden `.release`
+directory. The successor explicitly includes hidden files only under the
+existing tarball/receipt/consumer JSON globs in both workflows. It does not
+upload the npm cache or broaden them to arbitrary hidden files. The successor
+requires its own exact-source CI and clean-source candidate receipt.
+
 ## Remaining gates
 
 1. An explicit owner decision must establish the source license and grant.

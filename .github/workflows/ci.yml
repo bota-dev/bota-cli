@@ -49,3 +49,4 @@ jobs:
             .release/package-receipt.json
             .release/consumer/*.json
           if-no-files-found: error
+          include-hidden-files: true
