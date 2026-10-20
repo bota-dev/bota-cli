@@ -8,6 +8,24 @@ interface ClientOptions {
   apiUrl?: string;
 }
 
+// Private CLI identity model. This does not establish delegated login or profiles.
+export interface ProjectIdentity {
+  project_id: string;
+  organization_id: string;
+  key_id: string;
+  key_type: 'secret' | 'restricted';
+  is_test_mode: boolean;
+  scope_mode: 'project_secret' | 'restricted';
+  scopes: string[] | null;
+}
+
+export class BotaResponseError extends Error {
+  constructor(readonly status?: number, detail = 'expected a JSON response') {
+    super(status === undefined ? detail : `HTTP ${status}: ${detail}`);
+    this.name = 'BotaResponseError';
+  }
+}
+
 export const INTEGRATION_PROVIDERS = {
   asr: ['whisper', 'deepgram', 'assemblyai', 'elevenlabs'],
   llm: ['gemini', 'openai', 'claude'],
@@ -205,7 +223,7 @@ export class BotaClient {
       throw new BotaApiError(res.status, data?.['error'] as ConstructorParameters<typeof BotaApiError>[1], res.headers);
     }
 
-    if (data === undefined) throw new Error(`HTTP ${res.status}: expected a JSON response`);
+    if (data === undefined) throw new BotaResponseError(res.status);
 
     return data as T;
   }
@@ -224,6 +242,23 @@ export class BotaClient {
 
   delete<T>(path: string): Promise<T> {
     return this.request<T>('DELETE', path);
+  }
+
+  async getProjectIdentity(): Promise<ProjectIdentity> {
+    const value = await this.get<unknown>('/v1/auth/identity');
+    const data = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    if (typeof data.project_id !== 'string' || typeof data.organization_id !== 'string' || typeof data.key_id !== 'string'
+      || typeof data.is_test_mode !== 'boolean'
+      || !(data.key_type === 'secret' && data.scope_mode === 'project_secret' && data.scopes === null
+        || data.key_type === 'restricted' && data.scope_mode === 'restricted' && Array.isArray(data.scopes)
+          && data.scopes.every(scope => typeof scope === 'string'))) {
+      throw new BotaResponseError(undefined, 'unexpected identity response');
+    }
+    return {
+      project_id: data.project_id, organization_id: data.organization_id, key_id: data.key_id,
+      key_type: data.key_type as ProjectIdentity['key_type'], is_test_mode: data.is_test_mode,
+      scope_mode: data.scope_mode as ProjectIdentity['scope_mode'], scopes: data.scopes === null ? null : [...data.scopes as string[]],
+    };
   }
 
   private async integrationRequest<T>(method: string, path: string, body: unknown, decode: (value: unknown) => T): Promise<T> {

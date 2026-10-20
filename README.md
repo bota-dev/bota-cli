@@ -17,12 +17,19 @@ bota auth login
 # Headless / CI — pass your key directly
 bota auth login sk_live_...
 
-# Confirm the saved key is valid
+# Resolve the selected project credential's identity
 bota auth status
+bota auth status --json
 
 # Remove saved credentials
 bota auth logout
 ```
+
+`auth status` calls `GET /v1/auth/identity` once. It does not read end-user data or require `end_users:read`: a valid restricted key with only device or integration scopes, or no scopes, can resolve its own identity. JSON success contains `project_id`, `organization_id`, `key_id`, `key_type`, `is_test_mode`, `scope_mode`, and `scopes`. IDs are opaque database identifiers; `key_id` is not the credential. A secret key reports `scope_mode: "project_secret"` with `scopes: null`; a restricted key reports its exact stored scope array, including an empty array. The key's test flag does not establish an isolated environment or project.
+
+Status output excludes key material, key hints, and API URLs. Status rendering escapes C0, DEL, C1, and direction/line controls in opaque identifiers and scope strings; JSON parsing preserves the exact stored values. `--json` writes success to stdout; failures use a fixed `error` object on stderr and exit nonzero. Invalid credentials (401), unsupported credential authority (403), organization quarantine (423), rate limiting (429), service failures, malformed responses, and connectivity failures are distinguished. A temporary service failure does not establish that a credential is invalid. The command never falls back to a business read or retries the check.
+
+This bounded status change preserves the existing selection order: a saved configuration key takes precedence over `BOTA_API_KEY`. With no saved key, inject a restricted key through `BOTA_API_KEY`; direct `auth login <key>` retains its existing secret-key format check. Status does not rewrite configuration, change login/logout, introduce delegated OAuth or secure profiles, or change the selected API origin. A matching backend identity endpoint is required; source delivery, backend deployment, and CLI publication remain separate.
 
 ## Commands
 

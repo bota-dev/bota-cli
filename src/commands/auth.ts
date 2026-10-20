@@ -2,8 +2,8 @@ import { Command } from 'commander';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readConfig, writeConfig, getApiUrl, getDashboardUrl } from '../config.js';
-import { BotaClient } from '../client.js';
-import { ok, info, warn } from '../output.js';
+import { ok, info } from '../output.js';
+import { showAuthStatus } from './auth-status.js';
 
 export function registerAuth(program: Command): void {
   const auth = program.command('auth').description('Manage authentication');
@@ -113,24 +113,7 @@ export function registerAuth(program: Command): void {
       const config = readConfig();
       const key = config.apiKey ?? process.env['BOTA_API_KEY'];
 
-      if (!key) {
-        warn('Not authenticated. Run: bota auth login');
-        process.exit(1);
-      }
-
-      const masked = `${key.slice(0, 10)}...${key.slice(-4)}`;
       const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
-
-      info(`Key:     ${masked}`);
-      info(`API URL: ${apiUrl}`);
-
-      try {
-        const client = new BotaClient({ apiKey: key, apiUrl });
-        await client.get('/v1/end-users', { limit: 1 });
-        ok('API key is valid');
-      } catch (e) {
-        warn(`API key check failed: ${(e as Error).message}`);
-        process.exit(1);
-      }
+      await showAuthStatus({ apiKey: key, apiUrl, json: Boolean(globalOpts['json']) });
     });
 }
