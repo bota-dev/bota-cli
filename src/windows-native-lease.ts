@@ -1,10 +1,20 @@
-/** Inert T06 Windows lease adapter. No native store, profile/provider or CLI wiring. */
+/** Windows ownership and callback authority. No profile/provider or CLI wiring. */
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { NativeLeasePort, NativeOperationContext } from './native-profile-transaction.js';
 import { createWindowsLeaseApi, nativeLeaseRootPath, WindowsNativeError,
   type WindowsLeaseApi, type WindowsOwnedHandle } from './windows-native-api.js';
 
 export const WINDOWS_NATIVE_STORE_ID = 'windows-credential-manager';
+export interface WindowsNativeLeaseAccess {
+  readonly name: string;
+  readonly storeId: typeof WINDOWS_NATIVE_STORE_ID;
+  readonly rootDirectory: string;
+}
+interface LeaseTicket {
+  readonly context: NativeOperationContext;
+  readonly binding: WindowsNativeLeaseAccess;
+}
 export class WindowsNativeLeaseContextError extends Error {
   declare readonly code: 'windows_native_cancelled' | 'windows_native_deadline';
   constructor(code: 'windows_native_cancelled' | 'windows_native_deadline') {
@@ -45,9 +55,11 @@ export async function openWindowsNativeLease(rootDirectory: string, context: Nat
  * is promised for a stalled OS/storage call. Close always runs despite abort. */
 export class WindowsNativeLease implements NativeLeasePort {
   declare readonly rootDirectory: string;
-  private active = false;
-  private closed = false;
-  private poisoned = false;
+  #active = false;
+  #closed = false;
+  #poisoned = false;
+  readonly #scope = new AsyncLocalStorage<LeaseTicket>();
+  #ticket: LeaseTicket | undefined;
   private constructor(private readonly api: WindowsLeaseApi, rootDirectory: string,
     private readonly rootHandles: WindowsOwnedHandle[]) {
     Object.defineProperty(this, 'rootDirectory', { value: rootDirectory, enumerable: true });
@@ -82,17 +94,29 @@ export class WindowsNativeLease implements NativeLeasePort {
   }
 
   private healthy(): void {
-    if (this.poisoned) throw new WindowsNativeError('windows_native_poisoned');
-    if (this.closed) throw new WindowsNativeError('windows_native_unavailable');
+    if (this.#poisoned) throw new WindowsNativeError('windows_native_poisoned');
+    if (this.#closed) throw new WindowsNativeError('windows_native_unavailable');
     this.api.assertHealthy();
+  }
+
+  /** Adapter authority exists only in this callback's async chain. Returning a
+   * binding does not grant authority: adapters must recheck on every operation.
+   * Descendants retain their old ALS value, but revocation makes it unusable. */
+  assertCurrentAccess(context: NativeOperationContext): WindowsNativeLeaseAccess {
+    this.healthy(); active(context);
+    const ticket = this.#scope.getStore();
+    if (!this.#active || !ticket || ticket !== this.#ticket || ticket.context !== context) {
+      throw new WindowsNativeError('windows_native_untrusted');
+    }
+    return ticket.binding;
   }
 
   async runExclusive<T>(storeId: string, name: string, context: NativeOperationContext, work: () => Promise<T>): Promise<T> {
     this.healthy(); active(context);
     if (storeId !== WINDOWS_NATIVE_STORE_ID || typeof name !== 'string' || !/^[a-z0-9-]{1,64}$/.test(name)
       || typeof work !== 'function') throw new WindowsNativeError('windows_native_untrusted');
-    if (this.active) throw new WindowsNativeError('windows_native_busy');
-    this.active = true;
+    if (this.#active) throw new WindowsNativeError('windows_native_busy');
+    this.#active = true;
     const handles: WindowsOwnedHandle[] = [];
     try {
       // Existing non-secret lease files persist. Kernel handle ownership, not
@@ -103,15 +127,19 @@ export class WindowsNativeLease implements NativeLeasePort {
         const handle = this.api.openLease(filename); handles.push(handle);
         assertFacts(this.api, handle, filename, 'private-file'); active(context);
       }
-      const result = await work();
+      const ticket: LeaseTicket = Object.freeze({ context,
+        binding: Object.freeze({ name, storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: this.rootDirectory }) });
+      this.#ticket = ticket;
+      const result = await this.#scope.run(ticket, work);
       active(context);
       return result;
     } finally {
+      this.#ticket = undefined;
       let failed = false;
       for (const handle of handles.reverse()) {
-        try { this.api.close(handle); } catch { this.poisoned = true; failed = true; }
+        try { this.api.close(handle); } catch { this.#poisoned = true; failed = true; }
       }
-      this.active = false;
+      this.#active = false;
       if (failed) throw new WindowsNativeError('windows_native_close_unknown');
     }
   }
@@ -119,12 +147,12 @@ export class WindowsNativeLease implements NativeLeasePort {
   /** Release pinned ancestry only after all callback work has joined. A failed
    * close poisons admission; each retired numeric handle is never retried. */
   close(): void {
-    if (this.closed) return;
-    if (this.active) throw new WindowsNativeError('windows_native_busy');
-    this.closed = true;
+    if (this.#closed) return;
+    if (this.#active) throw new WindowsNativeError('windows_native_busy');
+    this.#closed = true; this.#ticket = undefined; this.#scope.disable();
     let failed = false;
     for (const handle of [...this.rootHandles].reverse()) {
-      try { this.api.close(handle); } catch { this.poisoned = true; failed = true; }
+      try { this.api.close(handle); } catch { this.#poisoned = true; failed = true; }
     }
     if (failed) throw new WindowsNativeError('windows_native_close_unknown');
   }

@@ -81,6 +81,44 @@ test('invalid names/store, cancellation and expired budget refuse before new nat
   await assert.rejects(lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'valid', ctx, async () => {}), errorCode('windows_native_cancelled'));
   assert.equal(h.calls.length, before); lease.close();
 });
+
+test('adapter access is bound to the exact live callback, context and lease instance', async () => {
+  const h = fakeApi(), ctx = context(), lease = WindowsNativeLease.open(h.api, 'C:\\synthetic\\root', ctx);
+  const other = WindowsNativeLease.open(fakeApi().api, 'C:\\synthetic\\other', ctx);
+  assert.throws(() => lease.assertCurrentAccess(ctx), errorCode('windows_native_untrusted'));
+  await lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'selected', ctx, async () => {
+    const binding = lease.assertCurrentAccess(ctx);
+    assert.deepEqual(binding, { name: 'selected', storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: 'C:\\synthetic\\root' });
+    assert.equal(Object.isFrozen(binding), true);
+    assert.throws(() => { binding.name = 'other'; }, TypeError);
+    assert.throws(() => lease.assertCurrentAccess(context()), errorCode('windows_native_untrusted'));
+    assert.throws(() => other.assertCurrentAccess(ctx), errorCode('windows_native_untrusted'));
+    await Promise.resolve();
+    assert.equal(lease.assertCurrentAccess(ctx), binding);
+  });
+  assert.throws(() => lease.assertCurrentAccess(ctx), errorCode('windows_native_untrusted'));
+  other.close(); lease.close();
+  assert.throws(() => lease.assertCurrentAccess(ctx), errorCode('windows_native_unavailable'));
+});
+
+for (const throws of [false, true]) {
+  test(`async descendants cannot reuse a retired ticket after callback ${throws ? 'failure' : 'success'} or during a successor`, async () => {
+    const h = fakeApi(), ctx = context(), lease = WindowsNativeLease.open(h.api, 'C:\\synthetic\\root', ctx);
+    let release, stale;
+    const retired = lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'first', ctx, async () => {
+      stale = new Promise(resolve => { release = resolve; }).then(() => {
+        assert.throws(() => lease.assertCurrentAccess(ctx), errorCode('windows_native_untrusted'));
+      });
+      if (throws) throw new Error('synthetic callback');
+    });
+    if (throws) await assert.rejects(retired, /synthetic callback/); else await retired;
+    await lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'second', ctx, async () => {
+      assert.equal(lease.assertCurrentAccess(ctx).name, 'second'); release(); await stale;
+      assert.equal(lease.assertCurrentAccess(ctx).name, 'second');
+    });
+    lease.close();
+  });
+}
 test('deadline/cancellation after caller completion still closes both leases without extending budget', async () => {
   for (const mode of ['expire', 'abort']) {
     const h = fakeApi(), ctx = context(), lease = WindowsNativeLease.open(h.api, 'C:\\synthetic\\root', ctx);

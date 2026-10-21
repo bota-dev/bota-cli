@@ -1,7 +1,9 @@
-/** Narrow Windows x64 in-process bindings. No credential-store functions. */
+/** Narrow Windows x64 in-process bindings. No CLI/provider wiring. */
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { types } from 'node:util';
+import type { NativeReference } from './native-profile-transaction.js';
 
 export type WindowsNativeErrorCode = 'windows_native_unsupported' | 'windows_native_environment'
   | 'windows_native_untrusted' | 'windows_native_unavailable' | 'windows_native_busy'
@@ -50,6 +52,181 @@ export interface WindowsLeaseApi {
   localNtfs(filename: string): void;
   close(handle: WindowsOwnedHandle): void;
 }
+export interface WindowsSnapshotFileApi extends WindowsLeaseApi {
+  /** Existing open returns null only for exact ERROR_FILE_NOT_FOUND. */
+  openDataFile(filename: string, create: boolean): WindowsOwnedHandle | null;
+  readPrefix(handle: WindowsOwnedHandle, limit: number): Uint8Array;
+  readTail(handle: WindowsOwnedHandle, limit: number): Uint8Array;
+  flushDataFile(handle: WindowsOwnedHandle): void;
+}
+
+export type WindowsCredentialRead = Readonly<{ status: 'absent' } | { status: 'present'; key: string }>;
+export interface WindowsCredentialApi {
+  assertHealthy(): void;
+  readCredential(reference: NativeReference): WindowsCredentialRead;
+  writeCredential(reference: NativeReference, key: string): 'stored' | 'not_stored' | 'unknown';
+  deleteCredential(reference: NativeReference): 'deleted' | 'absent' | 'not_deleted' | 'unknown';
+}
+
+const CREDENTIAL_NAMESPACE = 'Bota/DeveloperToolchain/api-key/v1';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** Validate independently of the transaction engine; never invoke input hooks. */
+export function windowsCredentialReference(value: unknown): Readonly<NativeReference> {
+  if (!value || typeof value !== 'object' || types.isProxy(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) fail('windows_native_untrusted');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(value).length !== 2 || Object.keys(descriptors).length !== 2
+    || !['profile_id', 'credential_ref'].every(name => {
+      const descriptor = descriptors[name];
+      return descriptor?.enumerable && Object.hasOwn(descriptor, 'value')
+        && typeof descriptor.value === 'string' && UUID.test(descriptor.value);
+    })) fail('windows_native_untrusted');
+  const profile_id = descriptors.profile_id!.value as string, credential_ref = descriptors.credential_ref!.value as string;
+  if (profile_id === credential_ref) fail('windows_native_untrusted');
+  return Object.freeze({ profile_id, credential_ref });
+}
+export function windowsCredentialKey(value: unknown): string {
+  if (typeof value !== 'string' || !/^[\x21-\x7e]{1,2560}$/.test(value)) fail('windows_native_untrusted');
+  return value;
+}
+function credentialNames(reference: NativeReference): { target: string; username: string } {
+  return { target: `${CREDENTIAL_NAMESPACE}/${reference.profile_id}/${reference.credential_ref}`,
+    username: `${CREDENTIAL_NAMESPACE}:${reference.profile_id}:${reference.credential_ref}` };
+}
+
+/** Internal trusted binding/test port. Production supplies only fixed verified
+ * inbox functions below. No arbitrary target/type/persistence reaches them. */
+export interface WindowsCredentialBindings {
+  assertHealthy(): void;
+  poison(): void;
+  read(target: string, type: number, flags: number, output: Buffer): unknown;
+  write(credential: Buffer, flags: number): unknown;
+  delete(target: string, type: number, flags: number): unknown;
+  free(address: bigint): void;
+  lastError(): unknown;
+  view(address: bigint, length: number): ArrayBuffer;
+  address(buffer: Buffer): bigint;
+}
+
+/** Build the strict API over a trusted injected native port. This export is
+ * for fault fixtures; it is not a runtime plugin or configurable store. */
+export function bindWindowsCredentialApi(bindings: WindowsCredentialBindings): WindowsCredentialApi {
+  const unknown = (): never => { bindings.poison(); return fail('windows_native_unavailable'); };
+  const bool = (value: unknown): boolean => {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff) return unknown();
+    return value !== 0;
+  };
+  const boundedPointer = (value: unknown): bigint => {
+    if (typeof value !== 'bigint' || value <= 0n || value > 0xffffffffffffffffn) return unknown();
+    return value;
+  };
+  const copied = (address: bigint, size: number): Buffer => {
+    const result = Buffer.from(new Uint8Array(bindings.view(boundedPointer(address), size)));
+    if (result.length !== size) return unknown();
+    return result;
+  };
+  const stringEquals = (address: bigint, expected: string, allowNull = false): boolean => {
+    if (address === 0n) return allowNull && expected.length === 0;
+    // Read one aligned UTF-16 unit at a time, bounded by the known marker.
+    // Windows owns the returned allocation; no unbounded string decoder runs.
+    for (let index = 0; index <= expected.length; index++) {
+      const unit = copied(address + BigInt(index * 2), 2).readUInt16LE();
+      if (unit !== (index === expected.length ? 0 : expected.charCodeAt(index))) return false;
+    }
+    return true;
+  };
+  const withCredential = <T>(reference: NativeReference, use: (address: bigint, names: ReturnType<typeof credentialNames>) => T): T | null => {
+    bindings.assertHealthy();
+    const names = credentialNames(reference), output = Buffer.alloc(8);
+    let address = 0n;
+    try {
+      const found = bool(bindings.read(names.target, 1, 0, output));
+      // Capture GetLastError immediately on FALSE, before any other native call.
+      const status = found ? 0 : bindings.lastError();
+      if (!found) {
+        if (output.readBigUInt64LE() !== 0n) return unknown();
+        if (status === 1168) return null;
+        return fail('windows_native_unavailable');
+      }
+      address = boundedPointer(output.readBigUInt64LE());
+      return use(address, names);
+    } catch (error) {
+      if (error instanceof WindowsNativeError) throw error;
+      return unknown();
+    } finally {
+      if (address !== 0n) {
+        const owned = address; address = 0n; // Retire before the one free attempt.
+        try { bindings.free(owned); } catch { unknown(); }
+      }
+    }
+  };
+  const decoded = (address: bigint, names: ReturnType<typeof credentialNames>): string => {
+    const header = copied(address, 80); // CREDENTIALW, Windows x64 ABI only.
+    let secret: Buffer | undefined;
+    try {
+      const length = header.readUInt32LE(32), blob = header.readBigUInt64LE(40);
+      if (header.readUInt32LE(0) !== 0 || header.readUInt32LE(4) !== 1
+        || header.readUInt32LE(48) !== 2 || header.readUInt32LE(52) !== 0
+        || header.readBigUInt64LE(56) !== 0n || header.readBigUInt64LE(64) !== 0n
+        || length < 1 || length > 2560 || blob === 0n
+        || !stringEquals(header.readBigUInt64LE(8), names.target)
+        || !stringEquals(header.readBigUInt64LE(16), '', true)
+        || !stringEquals(header.readBigUInt64LE(72), names.username)) fail('windows_native_untrusted');
+      secret = copied(blob, length);
+      if (secret.some(byte => byte < 0x21 || byte > 0x7e)) fail('windows_native_untrusted');
+      return secret.toString('ascii');
+    } finally { secret?.fill(0); header.fill(0); }
+  };
+  return Object.freeze({
+    assertHealthy: () => bindings.assertHealthy(),
+    readCredential(value: NativeReference): WindowsCredentialRead {
+      const reference = windowsCredentialReference(value);
+      const key = withCredential(reference, decoded);
+      return key === null ? Object.freeze({ status: 'absent' }) : Object.freeze({ status: 'present', key });
+    },
+    writeCredential(value: NativeReference, key: string): 'stored' | 'not_stored' | 'unknown' {
+      const reference = windowsCredentialReference(value); windowsCredentialKey(key);
+      // CredWriteW upserts. Never knowingly overwrite any prior entry, even
+      // one whose fields/blob are malformed. The outer namespace lease covers
+      // cooperating writers; arbitrary same-user/admin writes remain trusted.
+      if (withCredential(reference, () => true) !== null) return 'not_stored';
+      const names = credentialNames(reference), target = Buffer.from(`${names.target}\0`, 'utf16le');
+      const username = Buffer.from(`${names.username}\0`, 'utf16le'), secret = Buffer.from(key, 'ascii');
+      const header = Buffer.alloc(80);
+      try {
+        bindings.assertHealthy(); header.writeUInt32LE(1, 4);
+        header.writeBigUInt64LE(boundedPointer(bindings.address(target)), 8);
+        header.writeUInt32LE(secret.length, 32);
+        header.writeBigUInt64LE(boundedPointer(bindings.address(secret)), 40);
+        header.writeUInt32LE(2, 48);
+        header.writeBigUInt64LE(boundedPointer(bindings.address(username)), 72);
+        const stored = bool(bindings.write(header, 0));
+        if (!stored) bindings.lastError();
+        // FALSE is never claimed to prove rollback of this store mutation.
+        return stored ? 'stored' : 'unknown';
+      } catch { bindings.poison(); return 'unknown'; }
+      finally { secret.fill(0); header.fill(0); target.fill(0); username.fill(0); }
+    },
+    deleteCredential(value: NativeReference): 'deleted' | 'absent' | 'not_deleted' | 'unknown' {
+      const reference = windowsCredentialReference(value);
+      // Validate every ownership marker and blob before deleting the exact
+      // reference. A malformed prior entry is never silently adopted/removed.
+      let present: boolean | null;
+      try { present = withCredential(reference, (address, names) => { decoded(address, names); return true; }); }
+      catch (error) {
+        if (error instanceof WindowsNativeError && error.code === 'windows_native_untrusted') return 'not_deleted';
+        throw error;
+      }
+      if (present === null) return 'absent';
+      try {
+        bindings.assertHealthy();
+        const deleted = bool(bindings.delete(credentialNames(reference).target, 1, 0));
+        const status = deleted ? 0 : bindings.lastError();
+        return deleted ? 'deleted' : status === 1168 ? 'absent' : 'unknown';
+      } catch { bindings.poison(); return 'unknown'; }
+    },
+  });
+}
 
 const SYSTEM = 'S-1-5-18', ADMINISTRATORS = 'S-1-5-32-544';
 const INSTALLER = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464';
@@ -78,7 +255,12 @@ function samePath(a: string, b: string): boolean { return a.toLowerCase() === b.
 /** All functions are synchronous, fixed-signature and on this calling thread.
  * Native calls cannot be preempted by JS cancellation. No .async(), callbacks,
  * arbitrary DLL paths, library unloading or koffi.reset() are used. */
-async function loadWindowsLeaseApi(): Promise<WindowsLeaseApi> {
+interface WindowsNativeApis {
+  readonly lease: WindowsLeaseApi;
+  readonly credentials: WindowsCredentialApi;
+  readonly snapshots: WindowsSnapshotFileApi;
+}
+async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
   assertWindowsNativeEnvironment();
   if (processPoisoned) fail('windows_native_poisoned');
   let koffi: typeof import('koffi');
@@ -116,6 +298,9 @@ async function loadWindowsLeaseApi(): Promise<WindowsLeaseApi> {
   const open = kernel.func('void * __stdcall CreateFileW(str16 filename, uint32 access, uint32 share, void *security, uint32 disposition, uint32 flags, void *template)');
   const close = kernel.func('int __stdcall CloseHandle(void *handle)');
   const lastError = kernel.func('uint32 __stdcall GetLastError()');
+  const readFile = kernel.func('int __stdcall ReadFile(void *handle, void *buffer, uint32 length, void *read, void *overlapped)');
+  const seekFile = kernel.func('int __stdcall SetFilePointerEx(void *handle, int64 distance, void *position, uint32 method)');
+  const flushFile = kernel.func('int __stdcall FlushFileBuffers(void *handle)');
   const fileInfo = kernel.func('int __stdcall GetFileInformationByHandle(void *handle, void *info)');
   const fileType = kernel.func('uint32 __stdcall GetFileType(void *handle)');
   const finalPath = kernel.func('uint32 __stdcall GetFinalPathNameByHandleW(void *handle, void *buffer, uint32 length, uint32 flags)');
@@ -133,6 +318,10 @@ async function loadWindowsLeaseApi(): Promise<WindowsLeaseApi> {
   const validAcl = security.func('int __stdcall IsValidAcl(void *acl)');
   const aclInfo = security.func('int __stdcall GetAclInformation(void *acl, void *buffer, uint32 length, uint32 kind)');
   const getAce = security.func('int __stdcall GetAce(void *acl, uint32 index, void *ace)');
+  const credentialRead = security.func('int __stdcall CredReadW(str16 target, uint32 type, uint32 flags, void *credential)');
+  const credentialWrite = security.func('int __stdcall CredWriteW(void *credential, uint32 flags)');
+  const credentialDelete = security.func('int __stdcall CredDeleteW(str16 target, uint32 type, uint32 flags)');
+  const credentialFree = security.func('void __stdcall CredFree(void *credential)');
   // Strong references retain both libraries while their methods exist.
   const libraries = [kernel, security];
   const healthy = () => { void libraries; assertWindowsNativeEnvironment(); if (processPoisoned) fail('windows_native_poisoned'); };
@@ -300,12 +489,68 @@ async function loadWindowsLeaseApi(): Promise<WindowsLeaseApi> {
       trust(handle, 'system-file'); localNtfs(expected);
     } finally { closeOwned(handle); }
   }
-  return Object.freeze(api);
+  const credentials = bindWindowsCredentialApi({ assertHealthy: healthy,
+    poison() { processPoisoned = true; },
+    read: credentialRead, write: credentialWrite, delete: credentialDelete, free: credentialFree,
+    lastError, view: (address, length) => koffi.view(address, length),
+    address: buffer => koffi.address(buffer),
+  });
+  const snapshots: WindowsSnapshotFileApi = Object.freeze({ ...api,
+    openDataFile(filename: string, create: boolean): WindowsOwnedHandle | null {
+      healthy();
+      let acquired: WindowsOwnedHandle | undefined;
+      const operation = (attributes: Buffer | null): WindowsOwnedHandle | null => {
+        // No truncation, replacement, delete sharing or reparse traversal.
+        const value = pointer(open(filename, 0xc0020080, 3, attributes, create ? 1 : 3, 0x80200000, null));
+        if (value === INVALID_HANDLE || value === 0n) {
+          const error = number(lastError());
+          if (!create && error === 2) return null;
+          return fail(error === 32 || error === 33 ? 'windows_native_busy' : 'windows_native_unavailable');
+        }
+        acquired = { value }; return acquired;
+      };
+      try { return boundary(() => create ? privateSecurity(operation) as WindowsOwnedHandle : operation(null)); }
+      catch (error) { if (acquired) closeOwned(acquired); throw error; }
+    },
+    readPrefix(handle: WindowsOwnedHandle, limit: number): Uint8Array {
+      healthy();
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) fail('windows_native_untrusted');
+      return boundary(() => {
+        const value = checkedHandle(handle), bytes = Buffer.alloc(limit), count = Buffer.alloc(4);
+        if (seekFile(value, 0n, null, 0) === 0) { lastError(); return fail('windows_native_unavailable'); }
+        if (readFile(value, bytes, limit, count, null) === 0) { lastError(); return fail('windows_native_unavailable'); }
+        const length = count.readUInt32LE();
+        if (length > limit) { processPoisoned = true; return fail('windows_native_unavailable'); }
+        return new Uint8Array(bytes.subarray(0, length));
+      });
+    },
+    readTail(handle: WindowsOwnedHandle, limit: number): Uint8Array {
+      healthy();
+      if (!Number.isInteger(limit) || limit < 1 || limit > 16) fail('windows_native_untrusted');
+      return boundary(() => {
+        const value = checkedHandle(handle), bytes = Buffer.alloc(limit), count = Buffer.alloc(4);
+        // Caller pins and checks size/identity around this bounded footer read.
+        if (seekFile(value, -BigInt(limit), null, 2) === 0) { lastError(); return fail('windows_native_unavailable'); }
+        if (readFile(value, bytes, limit, count, null) === 0) { lastError(); return fail('windows_native_unavailable'); }
+        const length = count.readUInt32LE();
+        if (length !== limit) { processPoisoned = true; return fail('windows_native_unavailable'); }
+        return new Uint8Array(bytes);
+      });
+    },
+    flushDataFile(handle: WindowsOwnedHandle): void {
+      healthy(); boundary(() => {
+        if (flushFile(checkedHandle(handle)) === 0) { lastError(); fail('windows_native_unavailable'); }
+      });
+    },
+  });
+  return Object.freeze({ lease: Object.freeze(api), credentials, snapshots });
 }
 
-export async function createWindowsLeaseApi(): Promise<WindowsLeaseApi> {
+let bootstrap: Promise<WindowsNativeApis> | undefined;
+async function windowsNativeApis(): Promise<WindowsNativeApis> {
   assertWindowsNativeEnvironment();
-  try { return await loadWindowsLeaseApi(); }
+  if (processPoisoned) fail('windows_native_poisoned');
+  try { return await (bootstrap ??= loadWindowsNativeApis()); }
   catch (error) {
     if (error instanceof WindowsNativeError) throw error;
     // A startup FFI exception can follow an allocating native call before its
@@ -314,6 +559,9 @@ export async function createWindowsLeaseApi(): Promise<WindowsLeaseApi> {
     return fail('windows_native_unavailable');
   }
 }
+export async function createWindowsLeaseApi(): Promise<WindowsLeaseApi> { return (await windowsNativeApis()).lease; }
+export async function createWindowsCredentialApi(): Promise<WindowsCredentialApi> { return (await windowsNativeApis()).credentials; }
+export async function createWindowsSnapshotFileApi(): Promise<WindowsSnapshotFileApi> { return (await windowsNativeApis()).snapshots; }
 
 /** Strict DOS-root spelling, with no devices, streams, aliases or dot segments. */
 export function nativeLeaseRootPath(value: unknown): string {

@@ -10,7 +10,9 @@ The current `src/index.ts` does not import this engine; the `tsup` entry remains
 that index. This source is not mounted in the CLI or either local MCP mode and
 is not part of their current executable bundle. Existing environment-v1
 profiles and no-profile credential precedence retain their own behavior. No
-owner profile, real credential store or live identity service is exercised.
+owner profile or live identity service is exercised. The initial engine checks
+use injected stores; the Windows continuation below separately records actual
+Credential Manager checks using synthetic entries only.
 
 ## Frozen port contract
 
@@ -211,3 +213,106 @@ be wired. The current MCP startup credential snapshot cannot establish the new
 lease contract. Delegated Platform login, public CLI licensing/publication and
 live-auth acceptance remain separate. Aggregate source/package/hosted receipts
 are recorded with the existing implementation track, not inferred here.
+
+## Windows credentials and SQLite continuation
+
+This continuation follows design v0.14 section 6.3.2 and implementation track
+section 19. It adds actual adapters while keeping the executable/provider wiring
+inactive. Native enrollment, explicit migration and delegated Platform login
+remain separate work.
+
+`WindowsNativeLease` now supplies active callback authority through a private
+AsyncLocalStorage ticket. Exact context and ticket identity are checked on every
+store/file admission, and authority is revoked before handle cleanup. A retained
+binding or asynchronous descendant cannot regain authority in a later callback,
+including reuse of the same context object.
+
+`WindowsNativeStore` binds a fixed Credential Manager target and username marker
+to the exact profile/reference UUID pair. Strict GENERIC/local-machine shape,
+bounded strings, flags, attributes and printable ASCII key bytes are required.
+Metadata stays outside the blob, preserving its entire 1–2560-byte capacity.
+Only ERROR_NOT_FOUND establishes absence. Because CredWriteW is an upsert, an
+immediate exact-target preflight refuses every existing entry; it never treats
+existence as cleanup ownership. Delete independently validates the marker and
+shape before one exact operation. Unknown mutations/free outcomes are not
+retried; owned temporary buffers are cleared and allocations are retired once.
+JavaScript strings and arbitrary OS allocation extents have no erasure/bounds
+proof. Trusted installed runtime, OS/native pointers and cooperative writers
+under one fixed production namespace lease remain premises.
+
+Actual Node22.23.2 and24.19.0 fixtures each wrote two fresh synthetic entries,
+privately verified keys of lengths 1 and2560, and verified them again from a
+separate process. All four entries were deleted once and proven absent. An
+artifact path guard initially rejected Node22's mixed-case temporary suffix
+before the child made any native call. The failed receipt is retained; recovery
+used only the two exact journal-owned, privately matched references, with no new
+write/retry/enumeration. Separate recovery and Node24 success receipts record
+zero remaining entries. No real key, owner profile or auth network is involved.
+
+`WindowsNativeSnapshots` combines the canonical codec with one fixed private
+SQLite database/journal pair. A native file guard checks current SID, protected
+DACL, regular single-link identity, bounded inventory, header and size, and pins
+both files without delete sharing. Partial/empty interrupted bootstrap, missing
+pair, aliases and foreign files refuse without repair or deletion. One valid
+initialized database with an empty persistent journal is permitted.
+
+The selected built-in SQLite source IDs are exact to Node22.23.2/SQLite3.51.3 and
+Node24.19.0/SQLite3.53.3. No new dependency is added. EXCLUSIVE precedes
+recovery-capable pragmas; PERSIST, synchronous=EXTRA, fixed schema/application ID,
+current SID, strict bounded row types and canonical bytes are required. Extension
+loading and trusted schema are disabled. CAS compares the live callback's
+observed revision and exact bytes inside a transaction. Attempted COMMIT,
+post-commit validation/cancellation or ambiguous close produces unknown and
+retires admission. A close is attempted once; uncertainty poisons the adapter.
+
+These are ordinary SQLite/VFS durability guarantees, conditional on OS/storage
+honoring synchronization. Windows VFS deletion ignores syncDir; EXTRA is not
+directory fsync, and no rename sequence is represented as durable publication.
+PERSIST/EXCLUSIVE avoids recurring journal unlink during this cohort's recovery.
+Process-kill recovery does not qualify physical power loss, cross-logon behavior,
+hostile same-user mutation or other runtimes/platforms. Synchronous OS/SQLite calls
+remain nonpreemptible.
+
+Independent review required bounded preflight before returning schema/metadata
+strings, poison on ambiguous source-ID qualification database close, and a
+composition fixture using the actual lease/file guard/SQLite engine with fake
+credential/identity ports. The implementation and final evidence incorporate
+these findings before acceptance.
+
+Review additionally identified SQLite's super-journal filename in a rollback
+journal as an external filesystem boundary. The native guard reads at most16
+tail bytes before any SQLite open and on every validation. It refuses every EOF
+magic match, including malformed length/checksum and zero-head/stale PERSIST
+cases, without decoding or following a filename. Both pinned readers require
+that marker: [Node22 source](https://github.com/nodejs/node/blob/v22.23.2/deps/sqlite/sqlite3.c#L60220)
+and [Node24 source](https://github.com/nodejs/node/blob/v24.19.0/deps/sqlite/sqlite3.c#L60938).
+Short/torn reads or changed identity/size refuse. The actual hot-journal negative
+preserves database, journal and wholly owned sibling sentinel and reaches no
+SQLite preparation. This is conservative refusal, not adoption/recovery of a
+foreign attached-database transaction.
+
+| Requirement | Evidence | Current status |
+| --- | --- | --- |
+| Live lease through adapter access | Exact-context ALS ticket, awaited continuation, stale descendant and successor-reuse fixtures | matched for the selected Windows cohort |
+| Exact owned credentials; preserve unknowns | 39 injected cases plus actual cross-process minimum/maximum key fixtures and absence proofs | matched at component level; native command/provider enrollment absent |
+| Fixed safe metadata namespace | 61 file-guard cases, actual no-delete pins and foreign/footer preservation | matched within trusted runtime/OS/admin premises |
+| Canonical transactional publication/recovery | SQLite state/CAS/ambiguity/kill cases and genuine lease/SQLite engine composition with fake store | matched within declared SQLite/VFS premises; physical power loss unverified |
+| One provider shared by CLI and MCP | No executable imports, production root or command integration in this slice | partial; explicit enrollment/migration and per-invocation qualification remain |
+
+Final individual suites pass on both pinned Windows runtimes: 39 credential,
+61 file-guard and32 SQLite cases. The lease suite has27 cases,26 passed and one
+expected Linux-refusal skip on Windows. Strict source types pass on both.
+Review's last schema.type byte-bound correction includes an embedded-NUL
+preservation negative. An interim SQLite run refused three native setups; its
+cause is unproved and its output remains development evidence. Fresh sequential
+focused reruns pass all32; final aggregate and installed receipts are recorded
+in the owning track rather than inferred from interim runs.
+
+The remaining provider gate is one canonical per-user production lease root for
+the shared Credential Manager namespace. Separate arbitrary test roots do not
+provide global serialization. Then qualify combined real-store enrollment and
+interruption recovery, safe input, explicit migration and per-invocation CLI/MCP
+resolution; the existing MCP
+startup snapshot remains insufficient. Source/package checks do not claim
+installed native enrollment or enable Platform login. Detailed final source and
+qualification receipts belong to implementation track section 19.
