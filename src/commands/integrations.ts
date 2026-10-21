@@ -1,8 +1,9 @@
+import { withCommandAuth } from '../invocation-auth.js';
 import { Command } from 'commander';
 import type { Readable } from 'node:stream';
 import { BotaClient, IntegrationError, integrationId, integrationProvider, safeIntegrationError } from '../client.js';
 import { getApiKey, getApiUrl } from '../config.js';
-import { printDetail, printError, printJson, printTable } from '../output.js';
+import { printDetail, printError, printJson, printTable, handleCommandFailure } from '../output.js';
 
 export const MAX_INTEGRATION_KEY_BYTES = 16 * 1024;
 
@@ -47,47 +48,47 @@ export function registerIntegrations(program: Command): void {
   const client = () => new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(program.opts()['apiUrl'] as string | undefined) });
   const run = async (operation: () => Promise<void>): Promise<void> => {
     try { await operation(); }
-    catch (error) { printError(safeIntegrationError(error), Boolean(program.opts()['json'])); process.exitCode = 1; }
+    catch (error) { handleCommandFailure(error, Boolean(program.opts()['json']), safeIntegrationError); }
   };
   const show = (value: Record<string, unknown> | object) => {
     if (program.opts()['json']) printJson(value); else printDetail(value as Record<string, unknown>);
   };
-  integrations.command('list').description('List safe integration metadata').action(() => run(async () => {
+  integrations.command('list').description('List safe integration metadata').action(withCommandAuth(program, () => run(async () => {
     const page = await client().listIntegrations();
     if (program.opts()['json']) printJson(page);
     else printTable(['id', 'provider_type', 'provider_name', 'is_enabled', 'has_error', 'last_used_at'], page.data.map(item => [item.id, item.provider_type, item.provider_name, String(item.is_enabled), String(item.has_error), item.last_used_at ?? '']));
-  }));
-  integrations.command('get <type> <provider>').description('Get safe integration metadata').action((type: string, provider: string) => run(async () => {
+  })));
+  integrations.command('get <type> <provider>').description('Get safe integration metadata').action(withCommandAuth(program, (type: string, provider: string) => run(async () => {
     show(await client().getIntegration(integrationProvider(type, provider), provider));
-  }));
+  })));
   integrations.command('set <type> <provider>').description('Create or replace a provider credential; the backend enables the integration')
     .requiredOption('--key-stdin', 'Read one provider key line from piped stdin (16 KiB, 30-second EOF deadline)')
-    .action((type: string, provider: string) => run(async () => {
+    .action(withCommandAuth(program, (type: string, provider: string) => run(async () => {
       const providerType = integrationProvider(type, provider);
       const key = await readIntegrationKey();
       show(await client().setIntegration(providerType, provider, key));
-    }));
+    })));
   integrations.command('rotate <id>').description('Replace a provider credential by integration UUID')
     .requiredOption('--key-stdin', 'Read one provider key line from piped stdin (16 KiB, 30-second EOF deadline)')
-    .action((id: string) => run(async () => {
+    .action(withCommandAuth(program, (id: string) => run(async () => {
       integrationId(id);
       const key = await readIntegrationKey();
       show(await client().rotateIntegration(id, key));
-    }));
+    })));
   for (const [name, enabled] of [['enable', true], ['disable', false]] as const) {
-    integrations.command(`${name} <id>`).description(`${name} an integration by UUID`).action((id: string) => run(async () => {
+    integrations.command(`${name} <id>`).description(`${name} an integration by UUID`).action(withCommandAuth(program, (id: string) => run(async () => {
       show(await client().setIntegrationEnabled(id, enabled));
-    }));
+    })));
   }
-  integrations.command('delete <id>').description('Delete an integration by UUID').action((id: string) => run(async () => {
+  integrations.command('delete <id>').description('Delete an integration by UUID').action(withCommandAuth(program, (id: string) => run(async () => {
     await client().deleteIntegration(id); show({ deleted: true });
-  }));
-  integrations.command('delete-provider <type> <provider>').description('Delete an integration by provider').action((type: string, provider: string) => run(async () => {
+  })));
+  integrations.command('delete-provider <type> <provider>').description('Delete an integration by provider').action(withCommandAuth(program, (type: string, provider: string) => run(async () => {
     await client().deleteIntegrationByProvider(integrationProvider(type, provider), provider); show({ deleted: true });
-  }));
-  integrations.command('test <type> <provider>').description('Explicitly check the stored credential with its provider (may consume provider capacity)').action((type: string, provider: string) => run(async () => {
+  })));
+  integrations.command('test <type> <provider>').description('Explicitly check the stored credential with its provider (may consume provider capacity)').action(withCommandAuth(program, (type: string, provider: string) => run(async () => {
     const result = await client().testIntegration(integrationProvider(type, provider), provider);
     show(result);
     if (!result.success) process.exitCode = 1;
-  }));
+  })));
 }

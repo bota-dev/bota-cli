@@ -4,8 +4,8 @@ import { readProfileIdentity } from '../profile-identity.js';
 import { printError } from '../output.js';
 
 const commandMessages = {
-  profile_selection_not_applicable: 'Use explicit profile names for profile management; omit the global --profile option.',
-  profile_legacy_auth_unavailable: 'Profile mode cannot run legacy auth login or logout. Add or remove an explicitly named environment profile instead.',
+  profile_selection_not_applicable: 'Use explicit profile names for profile management; omit the global --profile and --secure-profile options.',
+  profile_legacy_auth_unavailable: 'Profile mode cannot run legacy auth login or logout. Use explicitly named profile enrollment or removal instead.',
   invalid_profile_command: 'Invalid profile command. Run bota auth profiles --help; credentials are accepted only from BOTA_API_KEY.',
   profile_api_url_required: 'Profile enrollment requires an explicit --api-url for its trusted API origin.',
 } as const;

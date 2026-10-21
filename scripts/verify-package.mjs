@@ -68,6 +68,9 @@ try {
   assert.equal((await run(process.execPath, ['--import', 'tsx', 'src/index.ts', '--version'], root)).stdout.trim(), pkg.version);
   assert.match((await cli(['--help'])).stdout, /Bota developer CLI/);
   assert.match((await cli(['mcp', '--mode', 'hosted', '--help'])).stdout, /--mode/);
+  const secureHelp = await cli(['auth', 'secure-profiles', '--help']);
+  assert.match(secureHelp.stdout, /add.*name/); assert.match(secureHelp.stdout, /recover.*name/);
+  assert.equal(secureHelp.stderr, '', 'help must not bootstrap optional native storage');
   const calls = [];
   const identity = { project_id: 'proj_release_fixture', organization_id: 'org_release_fixture', key_id: 'sk_release_identifier',
     key_type: 'restricted', is_test_mode: false, scope_mode: 'restricted', scopes: [] };
@@ -81,6 +84,17 @@ try {
   assert.deepEqual(JSON.parse(result.stdout), identity); assert.equal(result.stderr, ''); assert.deepEqual(calls, ['/v1/auth/identity']);
   const profileOrigin = `http://127.0.0.1:${server.address().port}`;
   const keyEnvironment = { BOTA_API_KEY: 'rk_SYNTHETIC_RELEASE_FIXTURE' };
+  const beforeSecureRefusals = calls.length;
+  await assert.rejects(cli(['--json', '--profile', 'installed', '--secure-profile', 'installed', 'auth', 'status'], keyEnvironment), error => {
+    assert.equal(JSON.parse(error.stderr).error.code, 'profile_selection_not_applicable'); return true;
+  });
+  await assert.rejects(cli(['--json', '--api-url', profileOrigin, 'auth', 'secure-profiles', 'add', 'installed-secure',
+    '--from-env', '--allow-http-loopback'], { ...keyEnvironment, BOTA_API_URL: 'https://different.example.invalid' }), error => {
+    const detail = JSON.parse(error.stderr).error;
+    assert.equal(detail.code, 'profile_origin_mismatch'); assert.equal(detail.operation_may_have_executed, false);
+    assert.doesNotMatch(error.stdout + error.stderr, /rk_SYNTHETIC_RELEASE_FIXTURE/); return true;
+  });
+  assert.equal(calls.length, beforeSecureRefusals, 'secure selector/origin refusals must precede identity and storage');
   const enrollment = await cli(['--api-url', profileOrigin, 'auth', 'profiles', 'add', 'installed', '--from-env', '--allow-http-loopback'], keyEnvironment);
   const metadata = JSON.parse(enrollment.stdout);
   assert.deepEqual(metadata, { name: 'installed', format_version: 1, api_origin: profileOrigin,
@@ -108,7 +122,8 @@ try {
     node: process.version, npm: (await npm(['--version'])).stdout.trim(),
     consumer_environment_keys: Object.keys(env).sort(),
     consumer_lock_sha256: createHash('sha256').update(frozenLock).digest('hex'), resolved_dependencies: resolved,
-    checks: ['installed-version', 'source-version', 'installed-help', 'installed-hosted-mode-help', 'synthetic-empty-scope-identity',
+    checks: ['installed-version', 'source-version', 'installed-help', 'installed-hosted-mode-help', 'installed-secure-profile-help-no-native-bootstrap',
+      'installed-secure-selector-refusal', 'installed-secure-origin-refusal-before-storage', 'synthetic-empty-scope-identity',
       'installed-environment-profile-enrollment', 'installed-profile-status-one-preflight', 'installed-profile-local-list-removal',
       'frozen-consumer-lock', 'installed-provenance', 'bundle-and-input-hashes', 'direct-runtime-versions', 'consumer-dependency-licenses'] };
   await writeFile(join(artifact, 'package-receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`);

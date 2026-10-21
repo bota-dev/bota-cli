@@ -1,6 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v3';
 import { callMcpTool, IntegrationError, safeIntegration, safeIntegrationError, safeIntegrationList, safeIntegrationTest } from '../client.js';
+import { getApiKey, getApiUrl, isSecureInvocation } from '../config.js';
+import { errorDetails } from '../output.js';
 
 // The SDK calls this public Zod v3 method when validating an object. Keep the
 // real object schema for tools/list, but prevent raw issues (including unknown
@@ -15,13 +17,14 @@ function privateInput<T extends z.AnyZodObject>(schema: T) {
   return schema;
 }
 
-export function registerIntegrationMcpTools(server: McpServer, apiUrl: string, apiKey: string): void {
+export function registerIntegrationMcpTools(server: McpServer, apiUrl?: string, apiKey?: string): void {
   const provider = z.object({ provider_type: z.enum(['asr', 'llm']), provider_name: z.enum(['whisper', 'deepgram', 'assemblyai', 'elevenlabs', 'gemini', 'openai', 'claude']) }).strict();
   const forward = async (name: string, args: Record<string, unknown>, decode: (value: unknown) => unknown) => {
     try {
-      const text = await callMcpTool(apiUrl, apiKey, name, args);
+      const text = await callMcpTool(apiUrl ?? getApiUrl(), apiKey ?? getApiKey(), name, args);
       return { content: [{ type: 'text' as const, text: JSON.stringify(decode(JSON.parse(text)), null, 2) }] };
     } catch (error) {
+      if (isSecureInvocation()) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: errorDetails(error) }) }], isError: true };
       const safe = safeIntegrationError(error);
       return { content: [{ type: 'text' as const, text: JSON.stringify({ error: { code: safe.code, message: safe.message, ...(safe.status !== undefined && { status: safe.status }) } }) }], isError: true };
     }

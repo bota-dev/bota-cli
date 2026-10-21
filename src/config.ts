@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ProjectIdentity } from './client.js';
+import { NativeProfileTransactionError, type NativeOperationContext, type NativeResolvedCredential } from './native-profile-transaction.js';
 
 const CONFIG_DIR = join(homedir(), '.bota');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
@@ -16,12 +18,54 @@ interface ProfileContext {
 // A selected profile is resolved once before its command. It never reads or
 // updates the legacy credential file, and it is not a saved default selection.
 let profileContext: Readonly<ProfileContext> | undefined;
+interface InvocationScope { readonly profile: Readonly<ProfileContext>; readonly context: NativeOperationContext; active: boolean }
+const invocation = new AsyncLocalStorage<InvocationScope>();
+
+/** A secure action never changes the process-wide compatibility selection.
+ * Descendants retain their scope, but cannot use it once the action settles. */
+export async function withInvocationCredential<T>(credential: NativeResolvedCredential, context: NativeOperationContext,
+  action: () => Promise<T>): Promise<T> {
+  const profile = { apiUrl: credential.apiOrigin, identity: { ...credential.identity,
+    scopes: credential.identity.scopes === null ? null : [...credential.identity.scopes] } } as ProfileContext;
+  Object.defineProperty(profile, 'apiKey', { value: credential.apiKey });
+  const scope: InvocationScope = { profile: Object.freeze(profile), context, active: true };
+  try { return await invocation.run(scope, action); }
+  finally { scope.active = false; }
+}
+
+export function isSecureInvocation(): boolean { return invocation.getStore() !== undefined; }
+export function assertInvocationActive(): void {
+  const scope = invocation.getStore();
+  if (!scope) return;
+  if (!scope.active) throw new NativeProfileTransactionError('profile_operation_failed', false, true);
+  if (scope.context.signal.aborted) throw new NativeProfileTransactionError('profile_cancelled', false, true);
+  try { scope.context.budget.assertActive(); }
+  catch { throw new NativeProfileTransactionError('profile_deadline', false, true); }
+}
+export function getInvocationSignal(): AbortSignal | undefined { assertInvocationActive(); return invocation.getStore()?.context.signal; }
+/** A client cannot carry a credential into another action or outlive its own
+ * callback, including caller-owned contexts whose signal remains un-aborted. */
+export function captureInvocationAccess(): () => void {
+  const expected = invocation.getStore();
+  return () => {
+    if (invocation.getStore() !== expected) throw new NativeProfileTransactionError('profile_binding_mismatch');
+    assertInvocationActive();
+  };
+}
+export function assertInvocationCredential(apiUrl?: string, apiKey?: string): void {
+  assertInvocationActive();
+  const scope = invocation.getStore();
+  if (scope && (apiUrl !== undefined && apiUrl !== scope.profile.apiUrl
+    || apiKey !== undefined && apiKey !== scope.profile.apiKey)) throw new NativeProfileTransactionError('profile_binding_mismatch');
+}
 
 export function setProfileContext(context: ProfileContext): void {
   profileContext = Object.freeze({ ...context });
 }
 
 export function getProfileContext(): Readonly<ProfileContext> | undefined {
+  assertInvocationActive();
+  if (invocation.getStore()) return invocation.getStore()!.profile;
   return profileContext;
 }
 
@@ -44,7 +88,8 @@ export function writeConfig(config: Config): void {
 }
 
 export function getApiKey(): string {
-  if (profileContext) return profileContext.apiKey;
+  const selected = getProfileContext();
+  if (selected) return selected.apiKey;
   const config = readConfig();
   const key = config.apiKey ?? process.env['BOTA_API_KEY'];
   if (!key) {
@@ -55,7 +100,8 @@ export function getApiKey(): string {
 }
 
 export function getApiUrl(override?: string): string {
-  if (profileContext) return profileContext.apiUrl;
+  const selected = getProfileContext();
+  if (selected) return selected.apiUrl;
   if (override) return override;
   if (process.env['BOTA_API_URL']) return process.env['BOTA_API_URL'];
   const config = readConfig();

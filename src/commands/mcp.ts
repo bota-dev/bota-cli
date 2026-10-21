@@ -8,6 +8,8 @@ import { WEBHOOK_MANAGEMENT_UNAVAILABLE } from './webhooks.js';
 import { errorDetails } from '../output.js';
 import { registerIntegrationMcpTools } from './integration-mcp.js';
 import { startHostedMcp } from './hosted-mcp.js';
+import { createMcpRequestAuth, type RequestAuth } from '../invocation-auth.js';
+import { installMcpRequestAuth } from '../mcp-request-auth.js';
 
 function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -20,7 +22,12 @@ function fail(e: unknown) {
   return { content, isError: true };
 }
 
-export function registerMcp(program: Command): void {
+export interface McpCommandPorts {
+  /** Trusted code/test composition only; never selected by command input. */
+  readonly createRequestAuth: (name: string, apiUrlOverride?: string) => Promise<RequestAuth>;
+}
+
+export function registerMcp(program: Command, ports: McpCommandPorts = { createRequestAuth: createMcpRequestAuth }): void {
   program
     .command('mcp')
     .description('Start a local MCP server for IDE integration')
@@ -28,12 +35,21 @@ export function registerMcp(program: Command): void {
     .action(async (opts: { mode: string }) => {
       if (opts.mode !== 'legacy' && opts.mode !== 'hosted') throw new Error('--mode must be legacy or hosted.');
       const globalOpts = program.opts();
-      const apiKey = getApiKey();
-      const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
-      if (opts.mode === 'hosted') { await startHostedMcp(apiUrl, apiKey); return; }
-      const client = new BotaClient({ apiKey, apiUrl });
+      const secure = globalOpts['secureProfile'] !== undefined;
+      const authenticate = secure ? await ports.createRequestAuth(globalOpts['secureProfile'] as string, globalOpts['apiUrl'] as string | undefined) : undefined;
+      const apiKey = secure ? undefined : getApiKey();
+      const apiUrl = secure ? undefined : getApiUrl(globalOpts['apiUrl'] as string | undefined);
+      if (opts.mode === 'hosted') { await startHostedMcp(apiUrl, apiKey, authenticate); return; }
+      // Secure clients are constructed inside each authenticated callback. The
+      // compatibility cohort retains its existing once-resolved startup client.
+      const startup = secure ? undefined : new BotaClient({ apiKey, apiUrl });
+      const client = {
+        get: <T>(path: string, params?: Record<string, string | number | undefined>) => (startup ?? new BotaClient()).get<T>(path, params),
+        post: <T>(path: string, body?: unknown) => (startup ?? new BotaClient()).post<T>(path, body),
+      };
 
       const server = new McpServer({ name: 'bota', version: '0.1.0' });
+      const requestAuth = authenticate ? installMcpRequestAuth(server.server, authenticate) : undefined;
       registerIntegrationMcpTools(server, apiUrl, apiKey);
 
       server.registerTool(
@@ -209,13 +225,28 @@ export function registerMcp(program: Command): void {
         },
         async ({ webhook_id, event_type }) => {
           try {
-            const result = await callMcpTool(apiUrl, apiKey, 'trigger_webhook_event', { webhook_id, event_type });
+            const result = await callMcpTool(apiUrl ?? getApiUrl(), apiKey ?? getApiKey(), 'trigger_webhook_event', { webhook_id, event_type });
             return ok(result);
           } catch (e) { return fail(e); }
         },
       );
 
       const transport = new StdioServerTransport();
-      await server.connect(transport);
+      requestAuth?.registered();
+      let stop!: () => void;
+      const stopped = new Promise<void>(resolve => { stop = resolve; });
+      server.server.onclose = stop;
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      process.stdin.once('end', stop); process.stdin.once('close', stop);
+      try { await server.connect(transport); await stopped; }
+      finally {
+        requestAuth?.stop();
+        try { await server.close(); }
+        finally {
+          await requestAuth?.join();
+          process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
+          process.stdin.removeListener('end', stop); process.stdin.removeListener('close', stop);
+        }
+      }
     });
 }

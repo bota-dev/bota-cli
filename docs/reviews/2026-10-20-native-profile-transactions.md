@@ -316,3 +316,92 @@ resolution; the existing MCP
 startup snapshot remains insufficient. Source/package checks do not claim
 installed native enrollment or enable Platform login. Detailed final source and
 qualification receipts belong to implementation track section 19.
+
+## Secure enrollment and shared request authentication
+
+This continuation implements design v0.15 section 6.3.3 and implementation
+track section 20. It wires an explicit Windows API-key source preview, retaining
+the environment-v1 and no-profile compatibility cohorts. It does not enable
+delegated Platform login, migrate existing credentials or publish the package.
+
+Production resolves LocalAppData with SHGetKnownFolderPath using an explicitly
+opened current-process token, then appends the fixed BotaDeveloperToolchain
+leaf. Shell home/profile/data variables cannot redirect it. System DLL and
+native payload attestation remain mandatory. Returned Known Folder allocations
+and token handles are retired once; ambiguity poisons admission. Exact SQLite
+qualification precedes root creation, preventing an unsupported runtime from
+leaving an empty bootstrap pair that later appears interrupted.
+
+`auth secure-profiles add/show/remove/recover` accepts one explicit input mode
+and API origin; the separate global `--secure-profile` selector never changes
+legacy precedence. Safe bounded stdin/hidden prompt/environment input occurs
+only after native qualification and absent-name inspection. Conflicting origins
+are refused before input/storage and rechecked after deferred input. Metadata
+output omits credential references and journals. Explicit removal/recovery uses
+the same durable native transaction engine, including disabled reservations and
+unknown-outcome preservation.
+
+The shared provider owns one complete command or MCP list/call, including
+upstream close. It rereads current profile/store state and verifies current
+identity under the namespace lease before entering the action. Environment
+override presence is explicit, invalid values never fall back, and pending or
+disabled profiles cannot be bypassed. MCP startup pins only nonsecret binding;
+no bearer or network identity is captured. Invocation-local credentials retire
+when callbacks settle: retained clients, concurrent contexts and asynchronous
+descendants cannot borrow another invocation's authority. HTTP redirects and
+MCP replay are disabled; unread-body cancellation and client close are joined.
+
+Public MCP SDK request registration installs the legacy auth gate without
+private handler reflection. Each discovery/call has fresh authority. Parent
+cancellation, numeric request ID zero, shutdown abortion and joining are tested.
+Fixed private failures preserve recovery and possible-effect flags; secure
+legacy callback/validation error results are conservatively sanitized while
+successful result shapes remain compatible. Canonical hosted results retain
+their existing owning output contracts. Secure CLI failures propagate to one
+outer diagnostic boundary, with ordinary interrupt exit statuses preserved.
+
+| Requirement | Evidence | Conformance and remaining verification |
+| --- | --- | --- |
+| One trusted production namespace | Explicit-token Known Folder, fixed leaf, spoofed-home negatives and pre-root SQLite qualification | Source matched; the actual development-host AppData ancestor is refused before root/metadata/credential creation. No ACL repair or fallback. |
+| Safe explicit enrollment | Bounded stdin/prompt/environment tests, actual no-echo ConPTY checks on both pinned runtimes, origin/collision/cancel negatives | Matched for declared input/source cohort; installed canonical enrollment remains unverified. |
+| Genuine durable enrollment/recovery | Both pinned runtimes use actual WinCred, native lease/file guard and SQLite in fresh protected workspace fixtures | Six synthetic writes, independent exact marker/key readbacks, both interruption recoveries, six exact absence proofs and zero retained credentials. Controlled roots do not qualify production namespace serialization. |
+| Shared CLI/MCP authority | Service, invocation and public SDK protocol tests cover fresh identity, binding changes, removed/pending refusal, override privacy, callback retirement and cleanup | Matched within tested injected/source cohort; actual canonical installed path remains gated. |
+| Preserve compatibility and unknown state | Explicit selectors, retained tombstones/journals, no auto migration/retry or shared-key revocation | Matched for implemented paths; bounded native listing and explicit migration remain separate work. |
+| Platform login and publication | No grant/token endpoint or delegated credential enabled | T07–T09 and public release remain open; SDK MIT approval does not imply CLI source licensing. |
+
+The canonical acceptance attempt is preserved as a failure, not converted into
+a synthetic success. An existing AppData capability principal has applicable
+mutation rights outside the admitted ancestor principals. The CLI creates no
+Bota root, database, journal or credential, and no retry or permission repair is
+attempted. The controlled fixture uses explicit trusted test assembly only;
+production has no root override. Its external journals record exact absence,
+durable core intent and ownership before each real synthetic mutation, and
+retain all database/journal/tombstone files afterward. No owner credential,
+profile, credential enumeration or production API is involved.
+
+Separate real public-SDK stdio MCP fixtures pass on each pinned runtime. Startup
+performs no HTTP; each successful list/call verifies identity once. Both legacy
+and hosted processes remain alive while their exact owned synthetic credential
+is deleted, then refuse requests as store-absent without network. Ordinary
+removal writes the retained tombstone; subsequent requests refuse disabled state
+without network. Both modes join exit0. The two extra entries are proven absent,
+with all handles closed. This is explicit trusted fixture assembly, without a
+production-root override; it does not qualify installed canonical acceptance.
+
+An initial Known Folder probe using a null token exposed shell USERPROFILE
+coupling. The final explicit-token implementation passes the spoofed-variable
+checks. An intermediate overly broad SQLite qualification poison caused focused
+failures; the final version restricts global poison to uncertain qualification
+closure while retaining component-local close uncertainty. Failed development
+evidence remains preserved. Aggregate source, installed package and hosted
+receipts are recorded in the owning implementation track rather than inferred
+from these component results.
+
+Final aggregate source qualification passes482/485, with three expected platform
+skips and zero failures/cancellations, on Node24.19.0 (70.639s) and22.23.2
+(79.015s). Strict types pass on both and the unchanged dependency license gate
+passes182 packages. Full runtimes run sequentially with two workers and unchanged
+per-case limits; native fixture processes are joined and all eight synthetic
+credential entries are proven absent before delivery. Installed package and
+hosted checks retain independent receipts and do not change the canonical host
+refusal above.

@@ -14,6 +14,8 @@ import { registerProfiles, ProfileCommandError } from './commands/profiles.js';
 import { resolveEnvironmentProfile } from './profiles.js';
 import { readProfileIdentity } from './profile-identity.js';
 import { setProfileContext } from './config.js';
+import { registerSecureProfiles, SecureProfileCommandError } from './commands/secure-profiles.js';
+import * as secureProfileService from './secure-profiles.js';
 
 const program = new Command();
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
@@ -25,10 +27,12 @@ program
   .option('--api-url <url>', 'Override API base URL')
   .option('--dashboard-url <url>', 'Override dashboard/portal URL')
   .option('--profile <name>', 'Explicit environment-only profile; verify its origin/project before cloud operations')
+  .option('--secure-profile <name>', 'Explicit OS-stored project profile; verify current credentials for every action or MCP request')
   .option('--json', 'Output raw JSON');
 
 const auth = registerAuth(program);
 registerProfiles(auth, program);
+registerSecureProfiles(auth, program, secureProfileService);
 registerEndUsers(program);
 registerDevices(program);
 registerRecordings(program);
@@ -40,10 +44,12 @@ registerIntegrations(program);
 
 program.hook('preAction', async (_command, action) => {
   const options = program.opts();
-  if (options['profile'] === undefined) return;
+  const secure = options['secureProfile'] !== undefined;
+  if (secure && options['profile'] !== undefined) throw new ProfileCommandError('profile_selection_not_applicable');
+  if (!secure && options['profile'] === undefined) return;
   const route: string[] = [];
   for (let current: Command | null = action; current && current !== program; current = current.parent) route.unshift(current.name());
-  if (route[0] === 'auth' && route[1] === 'profiles') throw new ProfileCommandError('profile_selection_not_applicable');
+  if (route[0] === 'auth' && ['profiles', 'secure-profiles'].includes(route[1] ?? '')) throw new ProfileCommandError('profile_selection_not_applicable');
   if (route[0] === 'auth' && (route[1] === 'login' || route[1] === 'logout')) throw new ProfileCommandError('profile_legacy_auth_unavailable');
   // Local manual forwarding and unavailable webhook management need no API
   // identity or credential. Commander handles help before action hooks.
@@ -52,12 +58,20 @@ program.hook('preAction', async (_command, action) => {
   if (!cloud) return;
   // Preserve the existing fail-before-credentials behavior for unknown modes.
   if (route[0] === 'mcp' && !['legacy', 'hosted'].includes(action.opts()['mode'] as string)) return;
+  // The secure action wrapper owns the lease through the action. MCP resolves
+  // each request separately; startup never captures a stored bearer.
+  if (secure) return;
   const context = await resolveEnvironmentProfile({ name: options['profile'] as string,
     apiUrlOverride: options['apiUrl'] as string | undefined, readIdentity: readProfileIdentity });
   setProfileContext(context);
 });
 
+const privateArguments = process.argv.some(value => value === 'secure-profiles' || value === '--secure-profile' || value.startsWith('--secure-profile='));
+if (privateArguments) program.configureOutput({ outputError: () => printError(new SecureProfileCommandError('invalid_secure_profile_command'), Boolean(program.opts()['json'])) });
 program.parseAsync(process.argv).catch((e: unknown) => {
+  if (privateArguments && e && typeof e === 'object' && 'code' in e && typeof e.code === 'string' && e.code.startsWith('commander.')) {
+    e = new SecureProfileCommandError('invalid_secure_profile_command');
+  }
   printError(e, Boolean(program.opts()['json']));
-  process.exitCode = 1;
+  process.exitCode ??= 1;
 });

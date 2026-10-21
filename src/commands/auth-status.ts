@@ -1,5 +1,5 @@
 import { BotaApiError, BotaClient, BotaResponseError, type ProjectIdentity } from '../client.js';
-import { printError } from '../output.js';
+import { handleCommandFailure } from '../output.js';
 
 const messages = {
   not_authenticated: 'No credential is selected. Run: bota auth login, or supply BOTA_API_KEY.',
@@ -48,7 +48,6 @@ export async function showAuthStatus(options: { apiKey?: string; apiUrl: string;
     console.log(`Scope mode: ${identity.scope_mode}`);
     console.log(`Scopes: ${safeStatusJson(identity.scopes)}`);
   } catch (error) {
-    printError(error instanceof AuthStatusError ? error : statusError(error), options.json);
-    process.exitCode = 1;
+    handleCommandFailure(error, options.json, value => value instanceof AuthStatusError ? value : statusError(value));
   }
 }

@@ -1,4 +1,4 @@
-import { getApiKey, getApiUrl } from './config.js';
+import { getApiKey, getApiUrl, assertInvocationActive, getInvocationSignal, captureInvocationAccess, assertInvocationCredential } from './config.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -204,13 +204,20 @@ export class BotaApiError extends Error {
 export class BotaClient {
   private apiKey: string;
   private apiUrl: string;
+  private readonly signal: AbortSignal | undefined;
+  private readonly assertAccess: () => void;
 
   constructor(opts: ClientOptions = {}) {
+    this.assertAccess = captureInvocationAccess();
+    assertInvocationCredential(opts.apiUrl, opts.apiKey);
+    this.signal = getInvocationSignal();
     this.apiKey = opts.apiKey ?? getApiKey();
     this.apiUrl = opts.apiUrl ?? getApiUrl();
   }
 
   private async request<T>(method: string, path: string, body?: unknown, params?: Record<string, string | number | undefined>): Promise<T> {
+    this.assertAccess();
+    if (this.signal?.aborted) throw new Error('The selected operation was cancelled.');
     let url = `${this.apiUrl}${path}`;
 
     if (params) {
@@ -230,12 +237,16 @@ export class BotaClient {
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       redirect: 'error',
-      signal: AbortSignal.timeout(30_000),
+      credentials: 'omit',
+      signal: this.signal ? AbortSignal.any([this.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     });
 
+    try { this.assertAccess(); }
+    catch (error) { try { await res.body?.cancel(); } catch { /* Preserve fixed access failure. */ } throw error; }
     if (res.status === 204) return undefined as T;
 
     const data = await res.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    this.assertAccess();
 
     if (!res.ok) {
       throw new BotaApiError(res.status, data?.['error'] as ConstructorParameters<typeof BotaApiError>[1], res.headers);
@@ -309,13 +320,30 @@ export class BotaClient {
 }
 
 export async function callMcpTool(apiUrl: string, apiKey: string, toolName: string, args: Record<string, unknown>): Promise<string> {
+  assertInvocationActive();
+  assertInvocationCredential(apiUrl, apiKey);
+  const assertAccess = captureInvocationAccess();
+  const signal = getInvocationSignal();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, 30_000);
   const client = new Client({ name: 'bota-cli', version: '0.1.0' });
-  const transport = new StreamableHTTPClientTransport(new URL(`${apiUrl.replace(/\/+$/, '')}/mcp`), {
-    requestInit: { headers: { Authorization: `Bearer ${apiKey}` }, redirect: 'error' },
-  });
   try {
-    await client.connect(transport);
-    const result = CallToolResultSchema.parse(await client.callTool({ name: toolName, arguments: args }, undefined, { timeout: 30_000 }));
+    const transport = new StreamableHTTPClientTransport(new URL(`${apiUrl.replace(/\/+$/, '')}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${apiKey}` }, redirect: 'error' },
+      reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 1000, maxReconnectionDelay: 1000, reconnectionDelayGrowFactor: 1 },
+      fetch: (input, init) => {
+        assertAccess();
+        return fetch(input, { ...init, redirect: 'error', credentials: 'omit',
+          signal: init?.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal });
+      },
+    });
+    const requestOptions = { signal: controller.signal, timeout: 30_000, maxTotalTimeout: 30_000 };
+    await client.connect(transport, requestOptions);
+    assertAccess();
+    const result = CallToolResultSchema.parse(await client.callTool({ name: toolName, arguments: args }, undefined, requestOptions));
+    assertAccess();
     const content = result.content.find(item => item.type === 'text');
     const text = content?.type === 'text' ? content.text : JSON.stringify(result);
     if (result.isError) throw new Error(text);
@@ -331,6 +359,7 @@ export async function callMcpTool(apiUrl: string, apiKey: string, toolName: stri
     }
     return text;
   } finally {
-    await client.close();
+    try { await client.close(); }
+    finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }
   }
 }

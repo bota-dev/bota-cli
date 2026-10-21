@@ -7,6 +7,9 @@ import {
   ListToolsRequestSchema, ListToolsResultSchema, McpError,
   type CallToolRequest, type ListToolsRequest, type RequestId,
 } from '@modelcontextprotocol/sdk/types.js';
+import { getApiKey, getApiUrl, captureInvocationAccess } from '../config.js';
+import type { RequestAuth } from '../invocation-auth.js';
+import { NativeProfileTransactionError } from '../native-profile-transaction.js';
 
 const REQUEST_BUDGET_MS = 30_000;
 const UNKNOWN_OUTCOME = 'The outcome of a submitted operation may be unknown. Inspect its owning resource before retrying.';
@@ -27,8 +30,8 @@ function hostedUrl(apiUrl: string): URL {
   } catch { throw new Error('Use an HTTP(S) API base URL without embedded credentials, query, or fragment.'); }
 }
 
-export async function startHostedMcp(apiUrl: string, apiKey: string): Promise<void> {
-  const url = hostedUrl(apiUrl);
+export async function startHostedMcp(apiUrl?: string, apiKey?: string, authenticate?: RequestAuth): Promise<void> {
+  const startupUrl = authenticate ? undefined : hostedUrl(apiUrl!);
   const server = new Server({ name: 'bota-hosted-bridge', version: '0.1.0' }, { capabilities: { tools: {} } });
   const active = new Map<RequestId, AbortController>();
   const pending = new Set<Promise<unknown>>();
@@ -49,28 +52,30 @@ export async function startHostedMcp(apiUrl: string, apiKey: string): Promise<vo
     let expired = false;
     const timer = setTimeout(() => { expired = true; abort(); }, REQUEST_BUDGET_MS);
     const fetchCleanup: Array<() => void> = [];
-    const upstream = new Client({ name: 'bota-hosted-bridge', version: '0.1.0' }, { capabilities: {} });
-    upstream.onerror = () => undefined;
-    const transport = new StreamableHTTPClientTransport(url, {
-      requestInit: { headers: { Authorization: `Bearer ${apiKey}` }, redirect: 'error' },
-      reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 1000, maxReconnectionDelay: 1000, reconnectionDelayGrowFactor: 1 },
-      fetch: (input, init) => {
-        const fetchController = new AbortController();
-        const cancelFetch = () => fetchController.abort();
-        for (const signal of [controller.signal, init?.signal]) {
-          if (!signal) continue;
-          if (signal.aborted) cancelFetch(); else {
-            signal.addEventListener('abort', cancelFetch, { once: true });
-            fetchCleanup.push(() => signal.removeEventListener('abort', cancelFetch));
-          }
-        }
-        // The SDK supplies its own signal and does not spread requestInit on GET.
-        // Keep composition alive through response-body consumption, not just headers.
-        return fetch(input, { ...init, redirect: 'error', signal: fetchController.signal });
-      },
-    });
-    const operation = (async () => {
+    const scoped = async () => {
+      const assertAccess = captureInvocationAccess();
+      const upstream = new Client({ name: 'bota-hosted-bridge', version: '0.1.0' }, { capabilities: {} });
+      upstream.onerror = () => undefined;
       try {
+        const transport = new StreamableHTTPClientTransport(startupUrl ?? hostedUrl(getApiUrl()), {
+          requestInit: { headers: { Authorization: `Bearer ${apiKey ?? getApiKey()}` }, redirect: 'error' },
+          reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 1000, maxReconnectionDelay: 1000, reconnectionDelayGrowFactor: 1 },
+          fetch: (input, init) => {
+            assertAccess();
+            const fetchController = new AbortController();
+            const cancelFetch = () => fetchController.abort();
+            for (const signal of [controller.signal, init?.signal]) {
+              if (!signal) continue;
+              if (signal.aborted) cancelFetch(); else {
+                signal.addEventListener('abort', cancelFetch, { once: true });
+                fetchCleanup.push(() => signal.removeEventListener('abort', cancelFetch));
+              }
+            }
+            // SDK GET requests have a separate init; retain cancellation through
+            // response-body consumption, not just response headers.
+            return fetch(input, { ...init, redirect: 'error', credentials: 'omit', signal: fetchController.signal });
+          },
+        });
         const options = { signal: controller.signal, timeout: REQUEST_BUDGET_MS, maxTotalTimeout: REQUEST_BUDGET_MS };
         await upstream.connect(transport, options);
         if (request.method === 'tools/list') return await upstream.request({ method: request.method, params: request.params }, ListToolsResultSchema, options);
@@ -83,13 +88,21 @@ export async function startHostedMcp(apiUrl: string, apiKey: string): Promise<vo
       } finally {
         // Close first: aborting completed SDK requests can attempt cancellation
         // notifications, which must never create traffic after cleanup.
-        await closeHostedTransport(() => upstream.close(), () => {
-          controller.abort();
-          clearTimeout(timer);
-          downstreamSignal.removeEventListener('abort', abort);
-          for (const cleanup of fetchCleanup) cleanup();
-          if (active.get(id) === controller) active.delete(id);
-        });
+        await closeHostedTransport(() => upstream.close(), () => { for (const cleanup of fetchCleanup) cleanup(); });
+      }
+    };
+    const operation = (async () => {
+      try { return await (authenticate ? authenticate(controller.signal, scoped) : scoped()); }
+      catch (error) {
+        if (error instanceof NativeProfileTransactionError) throw new McpError(ErrorCode.InternalError, error.message,
+          { code: error.code, recovery_required: error.recovery_required, operation_may_have_executed: error.operation_may_have_executed });
+        throw error;
+      }
+      finally {
+        controller.abort(); clearTimeout(timer);
+        downstreamSignal.removeEventListener('abort', abort);
+        for (const cleanup of fetchCleanup) cleanup();
+        if (active.get(id) === controller) active.delete(id);
       }
     })();
     pending.add(operation);

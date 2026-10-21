@@ -1,6 +1,7 @@
+import { withCommandAuth } from '../invocation-auth.js';
 import { Command } from 'commander';
 import { BotaClient } from '../client.js';
-import { printTable, printJson, printDetail, printPagination, printError, ok } from '../output.js';
+import { printTable, printJson, printDetail, printPagination, handleCommandFailure, ok } from '../output.js';
 import { getApiKey, getApiUrl } from '../config.js';
 
 interface EndUser {
@@ -33,7 +34,7 @@ export function registerEndUsers(program: Command): void {
     .option('--limit <n>', 'Max results', '20')
     .option('--cursor <c>', 'Pagination cursor')
     .option('--external-id <id>', 'Filter by external ID')
-    .action(async (opts) => {
+    .action(withCommandAuth(program, async (opts) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -52,15 +53,14 @@ export function registerEndUsers(program: Command): void {
         );
         printPagination(res);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   eu
     .command('get <id>')
     .description('Get end user by ID')
-    .action(async (id: string) => {
+    .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -71,10 +71,9 @@ export function registerEndUsers(program: Command): void {
         }
         printDetail(user as Record<string, unknown>);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   eu
     .command('create')
@@ -82,7 +81,7 @@ export function registerEndUsers(program: Command): void {
     .requiredOption('--name <n>', 'Display name')
     .option('--email <e>', 'Email address')
     .option('--external-id <id>', 'External ID')
-    .action(async (opts) => {
+    .action(withCommandAuth(program, async (opts) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -98,15 +97,14 @@ export function registerEndUsers(program: Command): void {
         ok(`Created end user ${user.id}`);
         printDetail(user as Record<string, unknown>);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   eu
     .command('token <id>')
     .description('Issue a user token for an end user (replaces any existing token)')
-    .action(async (id: string) => {
+    .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -122,15 +120,14 @@ export function registerEndUsers(program: Command): void {
         }
         console.log('└─────────────────────────────────────────┘');
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   eu
     .command('token-revoke <id>')
     .description('Revoke the user token for an end user')
-    .action(async (id: string) => {
+    .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -139,8 +136,7 @@ export function registerEndUsers(program: Command): void {
           ok(`Token revoked for end user ${id}`);
         }
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 }

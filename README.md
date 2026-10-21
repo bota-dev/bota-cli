@@ -43,6 +43,66 @@ Status output excludes key material, key hints, and API URLs. Status rendering e
 
 Without `--profile`, the existing selection order remains: a saved configuration key takes precedence over `BOTA_API_KEY`. With no saved key, inject a restricted key through `BOTA_API_KEY`; direct `auth login <key>` retains its existing secret-key format check and plaintext storage behavior. Status does not rewrite that configuration or introduce delegated OAuth. A matching backend identity endpoint is required; source delivery, backend deployment, and CLI publication remain separate.
 
+### Secure API-key profiles in the source preview
+
+Secure profiles currently support **Windows x64, local NTFS, and the qualified
+Node 22.23.2 or 24.19.0 builds**. Unsupported or unavailable native storage fails
+without a plaintext fallback. Other hosts can use injected environment profiles.
+Existing ancestors of the OS-selected storage directory must also pass the
+native ownership and permissions checks. The CLI refuses an untrusted ancestor
+before creating its private root and never repairs existing permissions.
+The CLI package remains an unpublished candidate.
+
+```bash
+# Hidden terminal input; the key never appears in the command line
+bota --api-url https://api.bota.dev auth secure-profiles add work --key-prompt
+
+# A secret manager can instead pipe one key into the same command with --key-stdin
+# Explicit --from-env enrolls BOTA_API_KEY into the OS store
+bota auth secure-profiles show work
+bota --secure-profile work auth status --json
+bota --secure-profile work devices list
+bota --secure-profile work mcp --mode hosted
+
+# Explicit local recovery or removal; neither revokes the project API key
+bota auth secure-profiles recover work
+bota auth secure-profiles remove work
+```
+
+Choose exactly one input mode. Piped input accepts one printable ASCII key of
+1–2560 bytes, with an optional final LF or CRLF and a finite EOF deadline. Hidden
+prompting requires interactive stdin and stderr; it restores terminal state and
+joins output before returning the key. Standard-input MCP never prompts.
+
+Windows selects one fixed per-user storage location independently of shell
+HOME/USERPROFILE overrides. Key bytes live in Credential Manager; transactional
+metadata contains only identity, state and exact store references. A conflicting
+origin, changed stored-key identity, unavailable store or pending recovery stops
+selection. No profile is silently replaced. Removal first disables selection,
+then deletes only its exact owned credential and retains a removed reservation.
+
+Every selected CLI action and every MCP discovery/call rereads the profile and
+verifies current project/organization identity while holding its namespace lock
+through the action and cleanup. MCP pins nonsecret profile metadata at startup;
+it keeps no startup bearer. A removed/pending profile therefore stops subsequent
+requests in an already running MCP server. Concurrent requests can fail busy;
+the CLI never retries a submitted operation automatically.
+
+An explicitly present `BOTA_API_KEY` overrides a ready secure profile's key for
+that invocation only, and must match its project and organization. Invalid,
+empty or rejected overrides never fall back to the stored key. Both `--api-url`
+and `BOTA_API_URL` may only repeat the enrolled origin. HTTP requires explicit
+`--allow-http-loopback` enrollment for literal loopback development.
+
+`--secure-profile` is separate from environment-v1 `--profile`; combining them
+or using either selector for profile management/legacy login/logout refuses.
+Existing environment profiles and legacy configuration are not automatically
+read, migrated, rewritten or deleted by secure selection. Secure errors keep
+fixed private diagnostics and explicit recovery/unknown-outcome flags. Legacy
+MCP tool errors in secure mode conservatively hide callback/validation text;
+successful tool shapes remain compatible. Platform browser login is still a
+separate delegated-auth workflow and is not enabled by API-key enrollment.
+
 ### Environment-backed profiles in the source preview
 
 Explicit profiles bind an injected key to an API origin, project and organization.
@@ -212,7 +272,7 @@ bota mcp --mode hosted
 claude mcp add bota-hosted -- bota mcp --mode hosted
 ```
 
-Run `bota auth login` separately first, supply `BOTA_API_KEY`, or explicitly select an environment profile. Startup is noninteractive. Hosted mode uses the selected API base URL's `/mcp` endpoint and captures the credential and API URL once; restart the process after changing credentials or environment. Unknown modes and invalid API URLs fail locally. Package publication and availability of a matching hosted deployment remain separate from this source preview.
+Run `bota auth login` separately first, supply `BOTA_API_KEY`, or explicitly select a profile. Startup is noninteractive. Without `--secure-profile`, hosted mode uses the selected API base URL's `/mcp` endpoint and captures the credential and API URL once; restart the process after changing credentials or environment. Secure mode uses the per-request behavior above. Unknown modes and invalid API URLs fail locally. Package publication and availability of a matching hosted deployment remain separate from this source preview.
 
 Without `--profile`, bridge startup makes no network request. An explicit
 environment profile first verifies developer identity before connecting stdio;

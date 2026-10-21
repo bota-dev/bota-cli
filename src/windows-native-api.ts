@@ -59,6 +59,68 @@ export interface WindowsSnapshotFileApi extends WindowsLeaseApi {
   readTail(handle: WindowsOwnedHandle, limit: number): Uint8Array;
   flushDataFile(handle: WindowsOwnedHandle): void;
 }
+export interface WindowsKnownFolderApi {
+  /** Current user's existing OS-selected folder; no environment or creation. */
+  localAppData(): string;
+}
+/** Trusted fixed-signature test port, never a user-selected folder or DLL. */
+export interface WindowsKnownFolderBindings {
+  assertHealthy(): void;
+  poison(): void;
+  openCurrentToken(): WindowsOwnedHandle;
+  closeToken(token: WindowsOwnedHandle): void;
+  lookup(identifier: Buffer, flags: number, token: bigint, output: Buffer): unknown;
+  free(address: bigint): void;
+  view(address: bigint, length: number): ArrayBuffer;
+}
+export function bindWindowsKnownFolderApi(bindings: WindowsKnownFolderBindings): WindowsKnownFolderApi {
+  return Object.freeze({ localAppData(): string {
+    bindings.assertHealthy();
+    const output = Buffer.alloc(8);
+    let token: WindowsOwnedHandle | undefined;
+    let address = 0n;
+    try {
+      // An explicit process token makes user-folder expansion independent of
+      // inherited USERPROFILE, unlike the shell API's null-token behavior.
+      token = bindings.openCurrentToken();
+      if (typeof token.value !== 'bigint' || token.value <= 0n || token.value >= 0xffffffffffffffffn) {
+        bindings.poison(); fail('windows_native_unavailable');
+      }
+      // FOLDERID_LocalAppData {F1B32785-6FBA-4FCF-9D55-7B8E7F157091}.
+      // GUID's first three integer fields use Windows little-endian layout.
+      const result = bindings.lookup(Buffer.from('8527b3f1ba6fcf4f9d557b8e7f157091', 'hex'), 0, token.value, output);
+      address = output.readBigUInt64LE();
+      if (address > 0xffffffffffffeffen) { address = 0n; bindings.poison(); fail('windows_native_unavailable'); }
+      if (typeof result !== 'number' || !Number.isInteger(result) || result < -0x80000000 || result > 0x7fffffff) {
+        bindings.poison(); fail('windows_native_unavailable');
+      }
+      if (result !== 0 || address === 0n) fail('windows_native_unavailable');
+      const units: number[] = [];
+      for (let index = 0; index <= 2048; index++) {
+        const unit = Buffer.from(new Uint8Array(bindings.view(address + BigInt(index * 2), 2)));
+        if (unit.length !== 2) { bindings.poison(); fail('windows_native_unavailable'); }
+        const value = unit.readUInt16LE();
+        if (value === 0) return nativeLeaseRootPath(String.fromCharCode(...units));
+        units.push(value);
+      }
+      fail('windows_native_untrusted');
+    } catch (error) {
+      if (error instanceof WindowsNativeError) throw error;
+      // A throwing FFI call can leave an uncaptured allocation until restart.
+      bindings.poison(); fail('windows_native_unavailable');
+    } finally {
+      let cleanupFailed = false;
+      if (address !== 0n) {
+        const owned = address; address = 0n;
+        // SHGetKnownFolderPath requires this even after a failing HRESULT.
+        try { bindings.free(owned); }
+        catch { bindings.poison(); cleanupFailed = true; }
+      }
+      if (token) { try { bindings.closeToken(token); } catch { bindings.poison(); cleanupFailed = true; } }
+      if (cleanupFailed) fail('windows_native_close_unknown');
+    }
+  } });
+}
 
 export type WindowsCredentialRead = Readonly<{ status: 'absent' } | { status: 'present'; key: string }>;
 export interface WindowsCredentialApi {
@@ -259,6 +321,7 @@ interface WindowsNativeApis {
   readonly lease: WindowsLeaseApi;
   readonly credentials: WindowsCredentialApi;
   readonly snapshots: WindowsSnapshotFileApi;
+  readonly knownFolders: WindowsKnownFolderApi;
 }
 async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
   assertWindowsNativeEnvironment();
@@ -295,6 +358,8 @@ async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
     || kernelModule === 0n
     || !samePath(text(kernelOutput, number(moduleFilename(kernelModule, kernelOutput, 32768))), `${SYSTEM_DIRECTORY}\\kernel32.dll`)) fail('windows_native_untrusted');
   const security = koffi.load(`${SYSTEM_DIRECTORY}\\advapi32.dll`);
+  const shell = koffi.load(`${SYSTEM_DIRECTORY}\\shell32.dll`);
+  const ole = koffi.load(`${SYSTEM_DIRECTORY}\\ole32.dll`);
   const open = kernel.func('void * __stdcall CreateFileW(str16 filename, uint32 access, uint32 share, void *security, uint32 disposition, uint32 flags, void *template)');
   const close = kernel.func('int __stdcall CloseHandle(void *handle)');
   const lastError = kernel.func('uint32 __stdcall GetLastError()');
@@ -322,8 +387,10 @@ async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
   const credentialWrite = security.func('int __stdcall CredWriteW(void *credential, uint32 flags)');
   const credentialDelete = security.func('int __stdcall CredDeleteW(str16 target, uint32 type, uint32 flags)');
   const credentialFree = security.func('void __stdcall CredFree(void *credential)');
-  // Strong references retain both libraries while their methods exist.
-  const libraries = [kernel, security];
+  const knownFolder = shell.func('int __stdcall SHGetKnownFolderPath(void *identifier, uint32 flags, void *token, void *output)');
+  const taskFree = ole.func('void __stdcall CoTaskMemFree(void *memory)');
+  // Strong references retain libraries while their methods exist.
+  const libraries = [kernel, security, shell, ole];
   const healthy = () => { void libraries; assertWindowsNativeEnvironment(); if (processPoisoned) fail('windows_native_poisoned'); };
   const closeOwned = (handle: WindowsOwnedHandle): void => {
     if (handle.value === null) return;
@@ -478,7 +545,7 @@ async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
   };
   // Bootstrap trusts the fixed inbox path, never SystemRoot/PATH or caller data.
   // Attestation refuses path aliases/reparse objects and non-system-writable DLLs.
-  for (const basename of ['kernel32.dll', 'advapi32.dll']) {
+  for (const basename of ['kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll']) {
     const expected = `${SYSTEM_DIRECTORY}\\${basename}`, output = Buffer.alloc(65536);
     const module = pointer(moduleHandle(basename));
     if (module === 0n || !samePath(text(output, number(moduleFilename(module, output, 32768))), expected)) fail('windows_native_untrusted');
@@ -494,6 +561,21 @@ async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
     read: credentialRead, write: credentialWrite, delete: credentialDelete, free: credentialFree,
     lastError, view: (address, length) => koffi.view(address, length),
     address: buffer => koffi.address(buffer),
+  });
+  const knownFolders = bindWindowsKnownFolderApi({ assertHealthy: healthy,
+    poison() { processPoisoned = true; },
+    openCurrentToken() {
+      healthy(); return boundary(() => {
+        const output = Buffer.alloc(8);
+        // QUERY | IMPERSONATE | DUPLICATE, required by user-aware folder APIs.
+        if (openToken(INVALID_HANDLE, 14, output) === 0) fail('windows_native_unavailable');
+        const value = pointer(output.readBigUInt64LE());
+        if (value === 0n || value === INVALID_HANDLE) { processPoisoned = true; fail('windows_native_unavailable'); }
+        return { value };
+      });
+    },
+    closeToken: closeOwned, lookup: knownFolder, free: taskFree,
+    view: (address, length) => koffi.view(address, length),
   });
   const snapshots: WindowsSnapshotFileApi = Object.freeze({ ...api,
     openDataFile(filename: string, create: boolean): WindowsOwnedHandle | null {
@@ -543,7 +625,7 @@ async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
       });
     },
   });
-  return Object.freeze({ lease: Object.freeze(api), credentials, snapshots });
+  return Object.freeze({ lease: Object.freeze(api), credentials, snapshots, knownFolders });
 }
 
 let bootstrap: Promise<WindowsNativeApis> | undefined;
@@ -562,6 +644,7 @@ async function windowsNativeApis(): Promise<WindowsNativeApis> {
 export async function createWindowsLeaseApi(): Promise<WindowsLeaseApi> { return (await windowsNativeApis()).lease; }
 export async function createWindowsCredentialApi(): Promise<WindowsCredentialApi> { return (await windowsNativeApis()).credentials; }
 export async function createWindowsSnapshotFileApi(): Promise<WindowsSnapshotFileApi> { return (await windowsNativeApis()).snapshots; }
+export async function createWindowsKnownFolderApi(): Promise<WindowsKnownFolderApi> { return (await windowsNativeApis()).knownFolders; }
 
 /** Strict DOS-root spelling, with no devices, streams, aliases or dot segments. */
 export function nativeLeaseRootPath(value: unknown): string {

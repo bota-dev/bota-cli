@@ -1,6 +1,7 @@
+import { withCommandAuth } from '../invocation-auth.js';
 import { Command } from 'commander';
 import { BotaClient } from '../client.js';
-import { printTable, printJson, printDetail, printPagination, printError } from '../output.js';
+import { printTable, printJson, printDetail, printPagination, handleCommandFailure } from '../output.js';
 import { getApiKey, getApiUrl } from '../config.js';
 
 interface Device {
@@ -28,7 +29,7 @@ export function registerDevices(program: Command): void {
     .option('--limit <n>', 'Max results', '20')
     .option('--cursor <c>', 'Pagination cursor')
     .option('--end-user <eu_...>', 'Filter by end user ID')
-    .action(async (opts) => {
+    .action(withCommandAuth(program, async (opts) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -54,16 +55,15 @@ export function registerDevices(program: Command): void {
         );
         printPagination(res);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   devices
     .command('get <id>')
     .alias('inspect')
     .description('Get device by ID')
-    .action(async (id: string) => {
+    .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -74,15 +74,14 @@ export function registerDevices(program: Command): void {
         }
         printDetail(device as Record<string, unknown>);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   devices
     .command('stats')
     .description('Get fleet stats')
-    .action(async () => {
+    .action(withCommandAuth(program, async () => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -93,8 +92,7 @@ export function registerDevices(program: Command): void {
         }
         printDetail(stats);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 }

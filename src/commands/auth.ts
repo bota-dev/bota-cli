@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { readConfig, writeConfig, getApiUrl, getDashboardUrl, getProfileContext } from '../config.js';
 import { ok, info } from '../output.js';
 import { showAuthStatus } from './auth-status.js';
+import { withCommandAuth } from '../invocation-auth.js';
 
 export function registerAuth(program: Command): Command {
   const auth = program.command('auth').description('Manage authentication');
@@ -108,7 +109,7 @@ export function registerAuth(program: Command): Command {
   auth
     .command('status')
     .description('Show current auth status')
-    .action(async () => {
+    .action(withCommandAuth(program, async () => {
       const globalOpts = program.opts();
       const context = getProfileContext();
       if (context) {
@@ -120,6 +121,6 @@ export function registerAuth(program: Command): Command {
 
       const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
       await showAuthStatus({ apiKey: key, apiUrl, json: Boolean(globalOpts['json']) });
-    });
+    }));
   return auth;
 }

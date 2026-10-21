@@ -1,6 +1,7 @@
+import { withCommandAuth } from '../invocation-auth.js';
 import { Command } from 'commander';
 import { BotaClient } from '../client.js';
-import { printTable, printJson, printDetail, printPagination, printError, ok } from '../output.js';
+import { printTable, printJson, printDetail, printPagination, handleCommandFailure, ok } from '../output.js';
 import { getApiKey, getApiUrl } from '../config.js';
 
 interface Recording {
@@ -55,7 +56,7 @@ export function registerRecordings(program: Command): void {
     .option('--status <s>', 'Filter by status')
     .option('--start-date <iso>', 'Filter created_at at or after this ISO timestamp')
     .option('--end-date <iso>', 'Filter created_at before this ISO timestamp')
-    .action(async (opts) => {
+    .action(withCommandAuth(program, async (opts) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -84,15 +85,14 @@ export function registerRecordings(program: Command): void {
         );
         printPagination(res);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   recordings
     .command('get <id>')
     .description('Get recording by ID')
-    .action(async (id: string) => {
+    .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -119,16 +119,15 @@ export function registerRecordings(program: Command): void {
         }
         printDetail(recording as Record<string, unknown>);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   recordings
     .command('transcribe <id>')
     .description('Trigger transcription for a recording')
     .option('--provider <p>', 'ASR provider (whisper, deepgram, assemblyai, elevenlabs)')
-    .action(async (id: string, opts) => {
+    .action(withCommandAuth(program, async (id: string, opts) => {
       const globalOpts = program.opts();
       const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
       try {
@@ -142,10 +141,9 @@ export function registerRecordings(program: Command): void {
         }
         ok(`Transcription ${txn.id} requested (status: ${txn.status})`);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 
   recordings
     .command('summarize <id>')
@@ -153,7 +151,7 @@ export function registerRecordings(program: Command): void {
     .option('--provider <p>', 'LLM provider (gemini, openai, claude)')
     .option('--template <id>', 'Template ID or built-in alias (general_notes, sales_call, clinical_soap, legal_memo)')
     .option('--prompt <text>', 'Custom summary prompt (10–10000 characters; alternative to --template)')
-    .action(async (id: string, opts) => {
+    .action(withCommandAuth(program, async (id: string, opts) => {
       if (Boolean(opts.template) === Boolean(opts.prompt)) {
         throw new Error('Provide exactly one of --template or --prompt');
       }
@@ -180,8 +178,7 @@ export function registerRecordings(program: Command): void {
         }
         ok(`Summary ${summary.id} requested (status: ${summary.status})`);
       } catch (e) {
-        printError(e, Boolean(globalOpts['json']));
-        process.exitCode = 1;
+        handleCommandFailure(e, Boolean(globalOpts['json']));
       }
-    });
+    }));
 }

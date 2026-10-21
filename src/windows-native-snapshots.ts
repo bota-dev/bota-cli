@@ -31,6 +31,7 @@ const STORE = 'windows-credential-manager';
 const metadataSql = 'CREATE TABLE native_profile_store (singleton INTEGER PRIMARY KEY CHECK(singleton=1), format_version INTEGER NOT NULL CHECK(format_version=1), store_id TEXT NOT NULL, current_sid TEXT NOT NULL) STRICT';
 const profilesSql = 'CREATE TABLE native_profiles (name TEXT PRIMARY KEY NOT NULL CHECK(length(name) BETWEEN 1 AND 64 AND name NOT GLOB \'*[^a-z0-9-]*\'), revision TEXT NOT NULL CHECK(length(revision)=36), snapshot BLOB NOT NULL CHECK(length(snapshot) BETWEEN 1 AND 24576)) STRICT, WITHOUT ROWID';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+let runtimePoisoned = false;
 function fail(): never { throw new NativeProfileTransactionError('profile_busy'); }
 function row(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail();
@@ -61,6 +62,7 @@ function header(files: WindowsSnapshotFiles): void {
     || bytes.readUInt32BE(68) !== WINDOWS_SNAPSHOT_APPLICATION_ID) fail();
 }
 function sqlite(close: (database: Database) => void): SqliteModule {
+  if (runtimePoisoned) fail();
   // Built-in only. Requiring it here preserves the Node 22 experimental warning
   // and avoids evaluating this optional cohort for ordinary CLI commands.
   const module = createRequire(import.meta.url)('node:sqlite') as SqliteModule;
@@ -74,6 +76,16 @@ function sqlite(close: (database: Database) => void): SqliteModule {
   try { if (row(check.prepare('SELECT sqlite_source_id() AS id').get()).id !== expected) fail(); }
   finally { close(check); }
   return module;
+}
+/** In-memory qualification only. Production must call this before opening or
+ * creating the canonical root; unsupported runtimes must leave no empty pair.
+ * Uncertain qualification close retires SQLite admission for this process. */
+export function qualifyWindowsSnapshotRuntime(): void {
+  try { sqlite(database => {
+    try { database.close(); }
+    catch { runtimePoisoned = true; fail(); }
+  }); }
+  catch { fail(); }
 }
 function configure(db: Database): void {
   // EXCLUSIVE must precede schema-reading pragmas: recovery otherwise starts
