@@ -36,12 +36,24 @@ export interface NativeProfileSnapshot {
   readonly record: NativeProfileRecord | null;
   readonly journal: NativeProfileJournal | null;
 }
+export interface NativeProfileListEntry {
+  readonly name: string;
+  readonly snapshot: NativeProfileSnapshot;
+}
+export interface NativeEnrollmentBinding {
+  readonly api_origin: string;
+  readonly project_id: string;
+  readonly organization_id: string;
+}
 export interface NativeSnapshotPort {
   /** Must also refuse a colliding v1/foreign name. null means proven absent. */
   load(name: string, context: NativeOperationContext): Promise<unknown>;
   /** Atomic durable compare-and-publish; unknown must never be retried blindly. */
   publish(name: string, expectedRevision: string | null, next: NativeProfileSnapshot,
     context: NativeOperationContext): Promise<'committed' | 'not_committed' | 'unknown'>;
+  /** Full bounded metadata inventory under a metadata-only namespace ticket.
+   * This must not establish per-profile publication observations. */
+  list?(context: NativeOperationContext): Promise<readonly { readonly name: string; readonly snapshot: unknown }[]>;
 }
 export interface NativeStorePort {
   readonly id: string;
@@ -57,6 +69,8 @@ export interface NativeLeasePort {
    * Hold through work, including identity and caller action; release/join in
    * finally even after abort. mkdir/PID/age are not this authority. */
   runExclusive<T>(storeId: string, name: string, context: NativeOperationContext, work: () => Promise<T>): Promise<T>;
+  /** Own only the namespace for a credential-free aggregate metadata read. */
+  runMetadataExclusive?<T>(storeId: string, context: NativeOperationContext, work: () => Promise<T>): Promise<T>;
 }
 export interface NativeProfilePorts {
   readonly lease: NativeLeasePort;
@@ -323,13 +337,59 @@ export class NativeProfileTransactions {
   async inspect(name: string, context: NativeOperationContext): Promise<NativeProfileSnapshot | null> {
     return this.locked(name, context, () => this.load(name, context));
   }
-  async enroll(options: { readonly name: string; readonly apiOrigin: string; readonly allowHttpLoopback?: boolean; readonly key: string },
+  async list(context: NativeOperationContext): Promise<readonly NativeProfileListEntry[]> {
+    this.active(context);
+    if (typeof this.ports.lease.runMetadataExclusive !== 'function' || typeof this.ports.snapshots.list !== 'function') fail('profile_busy');
+    let entered = false, finished = false, workValue: readonly NativeProfileListEntry[] | undefined;
+    try {
+      const value = await this.ports.lease.runMetadataExclusive(this.storeId, context, async () => {
+        if (entered) fail('profile_busy');
+        entered = true; this.active(context);
+        let inventory: unknown;
+        try { inventory = await this.ports.snapshots.list!(context); } catch { return fail('profile_busy'); }
+        this.active(context);
+        try {
+          if (!Array.isArray(inventory) || types.isProxy(inventory) || Object.getPrototypeOf(inventory) !== Array.prototype
+            || inventory.length > 1024) fail('profile_invalid_metadata');
+          const descriptors = Object.getOwnPropertyDescriptors(inventory);
+          if (Reflect.ownKeys(inventory).length !== inventory.length + 1) fail('profile_invalid_metadata');
+          const names = new Set<string>(), entries: NativeProfileListEntry[] = [];
+          for (let index = 0; index < inventory.length; index++) {
+            const descriptor = descriptors[index];
+            if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) fail('profile_invalid_metadata');
+            const item = exact(descriptor.value, ['name', 'snapshot']); nameChecked(item.name);
+            if (names.has(item.name)) fail('profile_invalid_metadata'); names.add(item.name);
+            entries.push(Object.freeze({ name: item.name, snapshot: decodeNativeProfileSnapshot(item.snapshot, item.name, this.storeId) }));
+          }
+          entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+          workValue = Object.freeze(entries); finished = true; return workValue;
+        } catch { return fail('profile_invalid_metadata'); }
+      });
+      if (!entered || !finished || !Object.is(value, workValue)) fail('profile_lease_failed');
+      this.active(context); return value;
+    } catch (error) {
+      if (error instanceof NativeProfileTransactionError) throw error;
+      // This authority cannot mutate credentials or snapshots, so cleanup
+      // uncertainty never invents enrollment/removal recovery requirements.
+      return fail(entered ? 'profile_lease_failed' : 'profile_busy');
+    }
+  }
+  async enroll(options: { readonly name: string; readonly apiOrigin: string; readonly allowHttpLoopback?: boolean; readonly key: string;
+    readonly expectedEnrollmentBinding?: NativeEnrollmentBinding },
     context: NativeOperationContext): Promise<NativeProfileRecord> {
     return this.locked(options.name, context, async () => {
       const apiOrigin = origin(options.apiOrigin, options.allowHttpLoopback ?? false);
       if (await this.load(options.name, context) !== null) fail('profile_exists');
       const key = keyChecked(options.key);
+      let expected: NativeEnrollmentBinding | undefined;
+      if (options.expectedEnrollmentBinding !== undefined) {
+        const binding = exact(options.expectedEnrollmentBinding, ['api_origin', 'project_id', 'organization_id']);
+        if (!opaque(binding.project_id) || !opaque(binding.organization_id)) fail('profile_invalid_input');
+        if (binding.api_origin !== apiOrigin) fail('profile_origin_mismatch');
+        expected = Object.freeze({ api_origin: apiOrigin, project_id: binding.project_id, organization_id: binding.organization_id });
+      }
       const identity = await this.identity(null, apiOrigin, key, false, context);
+      if (expected && (identity.project_id !== expected.project_id || identity.organization_id !== expected.organization_id)) fail('profile_identity_mismatch');
       const record = recordDecoded({ format_version: 2, name: options.name, store_id: this.storeId, api_origin: apiOrigin,
         project_id: identity.project_id, organization_id: identity.organization_id, key_id: identity.key_id,
         allow_http_loopback: options.allowHttpLoopback ?? false, state: 'ready', profile_id: this.id(), credential_ref: this.id() }, options.name, this.storeId);

@@ -64,6 +64,8 @@ bota --secure-profile work auth status --json
 bota --secure-profile work devices list
 bota --secure-profile work mcp --mode hosted
 
+bota auth secure-profiles list --json
+
 # Explicit local recovery or removal; neither revokes the project API key
 bota auth secure-profiles recover work
 bota auth secure-profiles remove work
@@ -102,6 +104,23 @@ fixed private diagnostics and explicit recovery/unknown-outcome flags. Legacy
 MCP tool errors in secure mode conservatively hide callback/validation text;
 successful tool shapes remain compatible. Platform browser login is still a
 separate delegated-auth workflow and is not enabled by API-key enrollment.
+
+To copy a selected environment-v1 profile explicitly, keep its matching key in
+`BOTA_API_KEY` and repeat the trusted origin:
+
+```bash
+bota --api-url https://api.bota.dev auth secure-profiles migrate work --from-env
+```
+
+Migration verifies current identity against the captured source project and
+organization before native credential access or durable enrollment. It leaves
+the source profile and selected authentication mode unchanged; select the new
+copy explicitly with `--secure-profile`. Existing native names, including removed
+reservations, refuse. A later source edit cannot retarget that captured copy.
+`auth secure-profiles list` validates the complete bounded metadata inventory
+without reading credentials or contacting the API. Pending and removed states
+remain visible. Listing does not initialize an absent database; normal recovery
+of an admitted SQLite journal can still write its physical metadata files.
 
 ### Environment-backed profiles in the source preview
 

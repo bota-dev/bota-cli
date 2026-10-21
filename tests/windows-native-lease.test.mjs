@@ -101,6 +101,57 @@ test('adapter access is bound to the exact live callback, context and lease inst
   assert.throws(() => lease.assertCurrentAccess(ctx), errorCode('windows_native_unavailable'));
 });
 
+test('metadata ticket owns only namespace and cannot grant named adapter authority', async () => {
+  const h = fakeApi(), ctx = context(), lease = WindowsNativeLease.open(h.api, 'C:\\synthetic\\root', ctx);
+  const opens = h.calls.filter(item => item[0] === 'open').length;
+  await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {
+    const binding = lease.assertCurrentMetadataAccess(ctx);
+    assert.deepEqual(binding, { metadataOnly: true, storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: 'C:\\synthetic\\root' });
+    assert.equal(Object.isFrozen(binding), true); assert.equal(Object.hasOwn(binding, 'name'), false);
+    assert.deepEqual(h.calls.filter(item => item[0] === 'open').slice(opens).map(item => path.win32.basename(item[1])), ['store-windows-credential-manager.lease']);
+    assert.throws(() => lease.assertCurrentAccess(ctx), errorCode('windows_native_untrusted'));
+    assert.throws(() => lease.assertCurrentMetadataAccess(context()), errorCode('windows_native_untrusted'));
+    await assert.rejects(lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'any', ctx, async () => {}), errorCode('windows_native_busy'));
+    await assert.rejects(lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {}), errorCode('windows_native_busy'));
+  });
+  assert.throws(() => lease.assertCurrentMetadataAccess(ctx), errorCode('windows_native_untrusted'));
+  await lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'any', ctx, async () => {
+    assert.throws(() => lease.assertCurrentMetadataAccess(ctx), errorCode('windows_native_untrusted'));
+  });
+  lease.close();
+});
+
+test('metadata descendants cannot borrow a successor ticket with the same context', async () => {
+  const h = fakeApi(), ctx = context(), lease = WindowsNativeLease.open(h.api, 'C:\\synthetic\\root', ctx);
+  let release, stale, old;
+  await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {
+    old = lease.assertCurrentMetadataAccess(ctx);
+    stale = new Promise(resolve => { release = resolve; }).then(() => {
+      assert.throws(() => lease.assertCurrentMetadataAccess(ctx), errorCode('windows_native_untrusted'));
+      assert.throws(() => lease.assertCurrentAccess(ctx), errorCode('windows_native_untrusted'));
+    });
+  });
+  await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {
+    assert.notEqual(lease.assertCurrentMetadataAccess(ctx), old); release(); await stale;
+  });
+  lease.close();
+});
+
+test('metadata cancellation joins namespace close and close ambiguity poisons either ticket mode', async () => {
+  for (const mode of ['cancel', 'close']) {
+    const h = fakeApi(), ctx = context(), lease = WindowsNativeLease.open(h.api, 'C:\\synthetic\\root', ctx);
+    await assert.rejects(lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {
+      if (mode === 'cancel') ctx.controller.abort(); else h.closeFault = true;
+    }), errorCode(mode === 'cancel' ? 'windows_native_cancelled' : 'windows_native_close_unknown'));
+    assert.deepEqual(h.calls.filter(item => item[0] === 'close').map(item => item[1]), [4n]);
+    if (mode === 'close') {
+      await assert.rejects(lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, context(), async () => {}), errorCode('windows_native_poisoned'));
+      await assert.rejects(lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'any', context(), async () => {}), errorCode('windows_native_poisoned'));
+    }
+    lease.close();
+  }
+});
+
 for (const throws of [false, true]) {
   test(`async descendants cannot reuse a retired ticket after callback ${throws ? 'failure' : 'success'} or during a successor`, async () => {
     const h = fakeApi(), ctx = context(), lease = WindowsNativeLease.open(h.api, 'C:\\synthetic\\root', ctx);
@@ -242,12 +293,12 @@ async function scopedChild(source, message = 'HELD\n') {
   } catch (error) { child.kill(); await exited; clearTimeout(limit); throw error; }
   return { child, exited, finish: async killed => { if (killed) child.kill(); else child.stdin.end(); await exited; clearTimeout(limit); } };
 }
-async function owner(root) {
+async function owner(root, metadata = false) {
   const module = pathToFileURL(fileURLToPath(new URL('../src/windows-native-lease.ts', import.meta.url))).href;
   return scopedChild(`import {openWindowsNativeLease,WINDOWS_NATIVE_STORE_ID} from ${JSON.stringify(module)};
     const context={signal:new AbortController().signal,budget:{assertActive(){}}};
     const lease=await openWindowsNativeLease(${JSON.stringify(root)},context);
-    await lease.runExclusive(WINDOWS_NATIVE_STORE_ID,'held',context,async()=>{
+    await lease.${metadata ? 'runMetadataExclusive(WINDOWS_NATIVE_STORE_ID,context' : "runExclusive(WINDOWS_NATIVE_STORE_ID,'held',context"},async()=>{
       process.stdout.write('HELD\\n'); process.stdin.resume(); await new Promise(resolve=>process.stdin.once('end',resolve));
     }); lease.close();`);
 }
@@ -261,6 +312,23 @@ test('actual child owners exclude same/different profiles; process death release
     assert.deepEqual(await fs.readdir(root), before);
     child = await owner(root); await child.finish(false); child = undefined;
     await lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'held', ctx, async () => {});
+  } finally { if (child) await child.finish(true); lease?.close(); await cleanup(directory); }
+});
+
+test('actual metadata and named owners share the namespace kernel exclusion', { skip: !windows }, async () => {
+  const directory = await temporary(), root = path.join(directory, 'private'); let lease, child;
+  try {
+    const ctx = context(); lease = await openWindowsNativeLease(root, ctx);
+    child = await owner(root, true);
+    assert.deepEqual(await fs.readdir(root), ['store-windows-credential-manager.lease']);
+    await assert.rejects(lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'any', ctx, async () => assert.fail()), errorCode('windows_native_busy'));
+    await assert.rejects(lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => assert.fail()), errorCode('windows_native_busy'));
+    await child.finish(true); child = undefined;
+    await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {});
+    child = await owner(root);
+    await assert.rejects(lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => assert.fail()), errorCode('windows_native_busy'));
+    await child.finish(false); child = undefined;
+    await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {});
   } finally { if (child) await child.finish(true); lease?.close(); await cleanup(directory); }
 });
 test('loader diagnostic/code-loading overrides refuse before native loading and never print values', { skip: !windows }, async () => {

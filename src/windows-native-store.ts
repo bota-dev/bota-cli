@@ -36,7 +36,7 @@ export class WindowsNativeStore implements NativeStorePort {
     try {
       active(context);
       const access = this.lease.assertCurrentAccess(context);
-      if (access.storeId !== WINDOWS_NATIVE_STORE_ID || typeof access.name !== 'string'
+      if (Object.hasOwn(access, 'metadataOnly') || access.storeId !== WINDOWS_NATIVE_STORE_ID || typeof access.name !== 'string'
         || !/^[a-z0-9-]{1,64}$/.test(access.name)) throw new WindowsNativeError('windows_native_untrusted');
       this.api.assertHealthy();
     } catch (error) { safeFailure(error); }

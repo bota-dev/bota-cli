@@ -16,7 +16,7 @@ function harness() {
   const state = new Map(), secrets = new Map(), calls = [];
   const controller = new AbortController();
   const h = { state, secrets, calls, expired: false, publishNumber: 0, writeFault: undefined, deleteFault: undefined,
-    publishFaults: {}, loadOverride: undefined, readOverride: undefined, identityOverride: undefined, leaseFault: undefined };
+    publishFaults: {}, loadOverride: undefined, listOverride: undefined, readOverride: undefined, identityOverride: undefined, leaseFault: undefined };
   const context = { signal: controller.signal, budget: { assertActive() { if (h.expired) throw new Error(key); } } };
   h.context = context; h.controller = controller;
   const checked = (method, ctx, extra = {}) => {
@@ -41,6 +41,7 @@ function harness() {
       } finally { active = false; calls.push({ method: 'lease-exit', name }); gate.resolve(); }
     } },
     snapshots: {
+      async list(ctx) { checked('list', ctx); return h.listOverride ?? [...state].map(([name, snapshot]) => ({ name, snapshot: clone(snapshot) })); },
       async load(name, ctx) { checked('load', ctx, { name }); return h.loadOverride ?? clone(state.get(name) ?? null); },
       async publish(name, expected, value, ctx) {
         checked('publish', ctx, { name, expected, value });
@@ -95,7 +96,9 @@ function harness() {
       return identity(value === override ? { key_id: 'key:override' } : undefined);
     },
   };
+  ports.lease.runMetadataExclusive = (store, ctx, work) => ports.lease.runExclusive(store, undefined, ctx, work);
   h.ports = ports; h.engine = new NativeProfileTransactions(ports);
+  h.ids = () => sequence;
   h.enroll = (name = 'work') => h.engine.enroll({ name, apiOrigin: origin, key }, context);
   h.select = (options = {}, action = async value => ({ source: value.source, identity: value.identity })) => h.engine.withCredential('work', options, context, action);
   h.count = method => calls.filter(call => call.method === method).length;
@@ -124,6 +127,102 @@ test('native enrollment publishes durable intent before one write/readback/commi
   assert.doesNotMatch(JSON.stringify([...h.state.values()]), /CANARY|apiKey|key_hint|key_hash|scopes/);
   const snapshot = await h.engine.inspect('work', h.context);
   assert.ok(Object.isFrozen(snapshot)); assert.ok(Object.isFrozen(snapshot.record));
+});
+
+test('expected enrollment origin/project/organization are checked inside the authoritative identity boundary before IDs or mutation', async () => {
+  const expected = { api_origin: origin, project_id: 'project:opaque', organization_id: 'org:opaque' };
+  for (const field of ['project_id', 'organization_id']) {
+    const h = harness(); h.identityOverride = () => identity({ [field]: 'wrong-binding' });
+    await assert.rejects(h.engine.enroll({ name: 'work', apiOrigin: origin, key, expectedEnrollmentBinding: expected }, h.context),
+      failure('profile_identity_mismatch', false));
+    assert.equal(h.ids(), 0); assert.equal(h.count('store-read') + h.count('store-write') + h.count('publish'), 0);
+    assert.equal(h.count('identity'), 1);
+  }
+  const h = harness();
+  await assert.rejects(h.engine.enroll({ name: 'work', apiOrigin: origin, key,
+    expectedEnrollmentBinding: { ...expected, api_origin: 'https://other.example.invalid' } }, h.context), failure('profile_origin_mismatch', false));
+  assert.equal(h.ids(), 0); assert.equal(h.count('identity') + h.count('store-read') + h.count('publish'), 0);
+});
+
+test('enrollment snapshots expected bindings once before asynchronous identity and stores only the verified current key ID', async () => {
+  const h = harness(), expected = { api_origin: origin, project_id: 'project:opaque', organization_id: 'org:opaque' };
+  h.identityOverride = () => { expected.project_id = 'mutated-source'; return identity({ key_id: 'new-current-key' }); };
+  const record = await h.engine.enroll({ name: 'work', apiOrigin: origin, key, expectedEnrollmentBinding: expected }, h.context);
+  assert.equal(record.project_id, 'project:opaque'); assert.equal(record.key_id, 'new-current-key');
+  assert.doesNotMatch(JSON.stringify(h.state.get('work')), /expectedEnrollmentBinding|mutated-source/);
+  const changed = harness(), captured = { api_origin: origin, project_id: 'project:opaque', organization_id: 'org:opaque' };
+  changed.identityOverride = () => { captured.project_id = 'wrong-project'; return identity({ project_id: 'wrong-project' }); };
+  await assert.rejects(changed.engine.enroll({ name: 'work', apiOrigin: origin, key, expectedEnrollmentBinding: captured }, changed.context),
+    failure('profile_identity_mismatch', false));
+  assert.equal(changed.ids(), 0); assert.equal(changed.count('publish') + changed.count('store-read'), 0);
+});
+
+test('expected enrollment binding rejects hostile shapes without invoking their hooks', async () => {
+  let hooks = 0;
+  const getter = { api_origin: origin, organization_id: 'org:opaque' };
+  Object.defineProperty(getter, 'project_id', { enumerable: true, get() { hooks++; return 'project:opaque'; } });
+  const proxy = new Proxy({}, { ownKeys() { hooks++; throw Error(key); } });
+  for (const expectedEnrollmentBinding of [getter, proxy, { api_origin: origin, project_id: '', organization_id: 'org:opaque' },
+    { api_origin: origin, project_id: 'project:opaque', organization_id: 'org:opaque', key_id: 'must-not-pin-v1-key' }]) {
+    const h = harness(); await assert.rejects(h.engine.enroll({ name: 'work', apiOrigin: origin, key, expectedEnrollmentBinding }, h.context));
+    assert.equal(h.ids(), 0); assert.equal(h.count('identity') + h.count('store-read') + h.count('publish'), 0);
+  }
+  assert.equal(hooks, 0);
+});
+
+test('metadata list uses only aggregate namespace authority, validates all states, sorts and freezes complete snapshots', async () => {
+  const h = harness(); assert.deepEqual(await h.engine.list(h.context), []);
+  await h.enroll('z-ready'); await h.enroll('a-removed'); await h.engine.remove('a-removed', h.context);
+  h.publishFaults[h.publishNumber + 2] = 'unknown-before';
+  await assert.rejects(h.enroll('m-pending'), failure('profile_state_unknown', true));
+  h.reset(); const rows = await h.engine.list(h.context);
+  assert.deepEqual(rows.map(item => item.name), ['a-removed', 'm-pending', 'z-ready']);
+  assert.equal(rows[0].snapshot.record.state, 'removed'); assert.equal(rows[1].snapshot.journal.phase, 'intent');
+  assert.ok(Object.isFrozen(rows) && rows.every(row => Object.isFrozen(row) && Object.isFrozen(row.snapshot)));
+  assert.equal(h.count('store-read') + h.count('store-write') + h.count('store-delete') + h.count('identity') + h.count('load') + h.count('publish'), 0);
+  assert.equal(h.count('list'), 1); assert.equal(h.calls.find(item => item.method === 'lease-enter').name, undefined);
+});
+
+test('metadata list refuses malformed, duplicate, sparse, hostile and oversized inventories without partial output', async () => {
+  const h = harness(); await h.enroll(); const item = { name: 'work', snapshot: clone(h.state.get('work')) };
+  let hooks = 0;
+  const getter = []; Object.defineProperty(getter, 0, { enumerable: true, get() { hooks++; return item; } });
+  const proxy = new Proxy([], { get(_target, name) { if (name === 'then') return undefined; hooks++; throw Error(key); } });
+  const broken = clone(item); broken.snapshot.record.store_id = 'foreign';
+  for (const value of [null, {}, new Array(1), getter, proxy, [item, item], [item, broken],
+    [{ ...item, name: 'wrong-name' }], [{ ...item, extra: true }], Array(1025).fill(item)]) {
+    h.listOverride = value;
+    // null is an explicit malformed port result, unlike the harness fallback.
+    const original = h.ports.snapshots.list;
+    if (value === null) h.ports.snapshots.list = async () => null;
+    try { await assert.rejects(h.engine.list(h.context), failure('profile_invalid_metadata', false)); }
+    finally { h.ports.snapshots.list = original; }
+  }
+  assert.equal(hooks, 0);
+});
+
+test('metadata list admits at most 1024 validated entries and requires explicit aggregate ports', async () => {
+  const h = harness(); await h.enroll(); const snapshot = clone(h.state.get('work'));
+  h.listOverride = Array.from({ length: 1024 }, (_, index) => {
+    const name = `profile-${String(index).padStart(4, '0')}`, value = clone(snapshot); value.record.name = name;
+    return { name, snapshot: value };
+  });
+  assert.equal((await h.engine.list(h.context)).length, 1024);
+  delete h.ports.snapshots.list; await assert.rejects(h.engine.list(h.context), failure('profile_busy', false));
+  const absent = harness(); delete absent.ports.lease.runMetadataExclusive;
+  await assert.rejects(absent.engine.list(absent.context), failure('profile_busy', false));
+});
+
+test('metadata-only callback cannot forge results, repeat work, bypass cancellation or invent mutation recovery', async () => {
+  for (const leaseFault of ['never-enter', 'forged-result', 'double-enter', 'release']) {
+    const h = harness(); h.leaseFault = leaseFault;
+    await assert.rejects(h.engine.list(h.context), error => { assert.equal(error.recovery_required, false); assert.equal(error.operation_may_have_executed, false); return true; });
+    assert.equal(h.count('identity') + h.count('store-read') + h.count('publish'), 0);
+  }
+  for (const condition of ['cancelled', 'deadline']) {
+    const h = harness(); if (condition === 'cancelled') h.controller.abort(key); else h.expired = true;
+    await assert.rejects(h.engine.list(h.context), failure(`profile_${condition}`, false)); assert.equal(h.calls.length, 0);
+  }
 });
 
 test('existing or terminal names refuse enrollment without credential identity or store activity', async () => {

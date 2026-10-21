@@ -217,6 +217,14 @@ test('store requires active exact lease/context and immutable fixed id', async (
   const foreign = WindowsNativeStore.open(h.api, lease(ctx, { storeId: 'foreign' }));
   await assert.rejects(foreign.read(reference, ctx), errorCode('windows_native_untrusted'));
 });
+
+test('metadata marker cannot confer credential authority even on a contradictory injected named binding', async () => {
+  const h = fixture(), ctx = context(), store = WindowsNativeStore.open(h.api, lease(ctx, { metadataOnly: true }));
+  for (const action of [() => store.read(reference, ctx), () => store.write(reference, 'synthetic-never-written', ctx), () => store.delete(reference, ctx)]) {
+    await assert.rejects(action(), errorCode('windows_native_untrusted'));
+  }
+  assert.deepEqual(h.calls, []);
+});
 test('pre-cancel/expired context causes zero credential calls', async () => {
   for (const mode of ['cancel', 'expire']) {
     const h = fixture(), ctx = context(), store = WindowsNativeStore.open(h.api, lease(ctx));

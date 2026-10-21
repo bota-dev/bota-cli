@@ -13,6 +13,7 @@ import { WINDOWS_SNAPSHOT_APPLICATION_ID, WINDOWS_SNAPSHOT_DATABASE, WINDOWS_SNA
   WINDOWS_SNAPSHOT_MAX_DATABASE_BYTES } from '../src/windows-snapshot-contract.ts';
 import { encodeNativeProfileSnapshot } from '../src/native-profile-codec.ts';
 import { NativeProfileTransactions } from '../src/native-profile-transaction.ts';
+import { WindowsNativeStore } from '../src/windows-native-store.ts';
 
 const windows = { skip: process.platform !== 'win32' };
 const sid = 'S-1-5-21-100-200-300-1001';
@@ -22,8 +23,8 @@ function context() {
   return { controller, expire() { expired = true; }, signal: controller.signal,
     budget: { assertActive() { if (expired) throw new Error('synthetic-private-budget'); } } };
 }
-function snapshot(state = 'ready') {
-  const record = { format_version: 2, name: 'profile-a', store_id: WINDOWS_NATIVE_STORE_ID,
+function snapshot(state = 'ready', name = 'profile-a') {
+  const record = { format_version: 2, name, store_id: WINDOWS_NATIVE_STORE_ID,
     api_origin: 'https://api.example.invalid', project_id: 'synthetic-project', organization_id: 'synthetic-org',
     key_id: 'synthetic-key-id', allow_http_loopback: false, state, profile_id: randomUUID(), credential_ref: randomUUID() };
   const journal = state === 'disabled' ? { format_version: 1, transaction_id: randomUUID(), operation: 'remove', phase: 'intent', desired: record } : null;
@@ -48,7 +49,13 @@ function fixture(t) {
   const root = temp(t), ctx = context(); let live, liveContext;
   const h = { root, ctx, validateHook: undefined, closeHook: undefined, openHook: undefined, closes: 0 };
   const guard = {
-    assertCurrentAccess(context) { assert.ok(live); assert.equal(context, liveContext); return live; },
+    assertCurrentAccess(context) { assert.ok(live); assert.equal(Object.hasOwn(live, 'metadataOnly'), false); assert.equal(context, liveContext); return live; },
+    assertCurrentMetadataAccess(context) { assert.ok(live); assert.equal(live.metadataOnly, true); assert.equal(context, liveContext); return live; },
+    openMetadata(binding, context) {
+      assert.equal(binding, live); assert.equal(context, liveContext);
+      if (!fs.existsSync(path.join(root, WINDOWS_SNAPSHOT_DATABASE)) && !fs.existsSync(path.join(root, WINDOWS_SNAPSHOT_JOURNAL))) return null;
+      return this.open(binding, context);
+    },
     open(binding, context) {
       assert.equal(binding, live); assert.equal(context, liveContext); h.openHook?.();
       const filename = path.join(root, WINDOWS_SNAPSHOT_DATABASE), journal = path.join(root, WINDOWS_SNAPSHOT_JOURNAL);
@@ -63,6 +70,10 @@ function fixture(t) {
   h.port = new WindowsNativeSnapshots(guard);
   h.run = async work => {
     assert.equal(live, undefined); live = Object.freeze({ name: 'profile-a', storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: root }); liveContext = ctx;
+    try { return await work(live); } finally { live = undefined; liveContext = undefined; }
+  };
+  h.runMetadata = async work => {
+    assert.equal(live, undefined); live = Object.freeze({ metadataOnly: true, storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: root }); liveContext = ctx;
     try { return await work(live); } finally { live = undefined; liveContext = undefined; }
   };
   h.seed = async value => h.run(async () => { assert.equal(await h.port.load('profile-a', ctx), null); assert.equal(await h.port.publish('profile-a', null, value, ctx), 'committed'); });
@@ -99,6 +110,58 @@ test('observations belong to one callback ticket even when the same context is r
   await assert.rejects(h.port.load('profile-a', h.ctx), busy);
   assert.equal(await h.port.publish('profile-a', initial.revision, snapshot(), h.ctx), 'not_committed');
   await h.run(async () => { await h.port.load('profile-a', h.ctx); assert.equal(await h.port.publish('another', initial.revision, snapshot(), h.ctx), 'not_committed'); assert.equal(await h.port.publish('profile-a', initial.revision, snapshot(), context()), 'not_committed'); });
+});
+
+test('metadata list returns only complete frozen rows and never establishes named CAS authority', windows, async t => {
+  const h = fixture(t), initial = snapshot();
+  await h.runMetadata(async () => assert.deepEqual(await h.port.list(h.ctx), []));
+  assert.deepEqual(fs.readdirSync(h.root), []);
+  await h.seed(initial);
+  await h.run(async () => await assert.rejects(h.port.list(h.ctx), busy));
+  await h.runMetadata(async () => {
+    const rows = await h.port.list(h.ctx);
+    assert.deepEqual(rows, [{ name: 'profile-a', snapshot: initial }]);
+    assert.equal(Object.isFrozen(rows), true); assert.equal(Object.isFrozen(rows[0]), true);
+    assert.equal(Object.isFrozen(rows[0].snapshot), true); assert.equal(Object.isFrozen(rows[0].snapshot.record), true);
+    await assert.rejects(h.port.load('profile-a', h.ctx), busy);
+    assert.equal(await h.port.publish('profile-a', initial.revision, snapshot(), h.ctx), 'not_committed');
+  });
+  await h.run(async () => assert.equal(await h.port.publish('profile-a', initial.revision, snapshot(), h.ctx), 'not_committed'));
+});
+
+for (const mode of ['cancel', 'deadline', 'close']) {
+  test(`metadata ${mode} during joined cleanup returns no result`, windows, async t => {
+    const h = fixture(t); await h.seed(snapshot());
+    h.closeHook = () => {
+      if (mode === 'cancel') h.ctx.controller.abort('synthetic-private-abort');
+      else if (mode === 'deadline') h.ctx.expire();
+      else throw new Error('synthetic-private-close');
+    };
+    await h.runMetadata(async () => await assert.rejects(h.port.list(h.ctx), error => ['profile_busy', 'profile_cancelled', 'profile_deadline'].includes(error.code)));
+    h.closeHook = undefined;
+    if (mode === 'close') {
+      const before = h.closes;
+      await h.runMetadata(async () => await assert.rejects(h.port.list(h.ctx), busy)); assert.equal(h.closes, before);
+    }
+  });
+}
+
+test('metadata SQL transaction rejects logical writes after its query-only boundary', windows, async t => {
+  const h = fixture(t), initial = snapshot(); await h.seed(initial);
+  const filename = path.join(h.root, WINDOWS_SNAPSHOT_DATABASE), journal = path.join(h.root, WINDOWS_SNAPSHOT_JOURNAL);
+  const before = [digest(filename), digest(journal)], prototype = DatabaseSync().prototype, original = prototype.exec;
+  let checked = false;
+  prototype.exec = function(sql) {
+    if (sql === 'BEGIN') {
+      assert.equal(this.prepare('PRAGMA query_only').get().query_only, 1);
+      assert.throws(() => this.prepare('DELETE FROM native_profiles').run(), error => error.errcode === 8);
+      checked = true;
+    }
+    return original.call(this, sql);
+  };
+  try { await h.runMetadata(async () => assert.deepEqual(await h.port.list(h.ctx), [{ name: 'profile-a', snapshot: initial }])); }
+  finally { prototype.exec = original; }
+  assert.equal(checked, true); assert.deepEqual([digest(filename), digest(journal)], before);
 });
 
 test('same revision with different valid bytes fails CAS without overwriting the observed database', windows, async t => {
@@ -193,6 +256,8 @@ for (const fault of ['application-id', 'version', 'wal-header', 'foreign-schema'
     const before = digest(filename), journalBefore = digest(path.join(h.root, WINDOWS_SNAPSHOT_JOURNAL));
     await h.run(async () => await assert.rejects(h.port.load('profile-a', h.ctx), busy));
     assert.equal(digest(filename), before); assert.equal(digest(path.join(h.root, WINDOWS_SNAPSHOT_JOURNAL)), journalBefore);
+    await h.runMetadata(async () => await assert.rejects(h.port.list(h.ctx), busy));
+    assert.equal(digest(filename), before); assert.equal(digest(path.join(h.root, WINDOWS_SNAPSHOT_JOURNAL)), journalBefore);
   });
 }
 
@@ -234,8 +299,56 @@ test('actual native pins remain held through SQLite bootstrap, CAS, reopen and f
     await lease.runExclusive(WINDOWS_NATIVE_STORE_ID,'profile-a',ctx,async()=>{assert.equal(await port.load('profile-a',ctx),null);assert.equal(await port.publish('profile-a',null,next,ctx),'committed');});
     await lease.runExclusive(WINDOWS_NATIVE_STORE_ID,'profile-a',ctx,async()=>assert.deepEqual(await port.load('profile-a',ctx),next));
     await killedWriter(nativeRoot,'uncommitted');
+    await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID,ctx,async()=>assert.deepEqual(await port.list(ctx),[{name:'profile-a',snapshot:next}]));
     await lease.runExclusive(WINDOWS_NATIVE_STORE_ID,'profile-a',ctx,async()=>assert.deepEqual(await port.load('profile-a',ctx),next));
     assert.ok(fs.existsSync(path.join(nativeRoot,WINDOWS_SNAPSHOT_JOURNAL)));
+  } finally { lease.close(); }
+});
+
+test('actual namespace-only metadata listing preserves empty absence, all states, CAS isolation and credential denial', windows, async t => {
+  const root = temp(t), nativeRoot = path.join(root, 'private-store'), ctx = context();
+  let lease = await openWindowsNativeLease(nativeRoot, ctx);
+  try {
+    let port = await createWindowsNativeSnapshots(lease);
+    await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {
+      assert.deepEqual(await port.list(ctx), []);
+      assert.deepEqual(fs.readdirSync(nativeRoot), ['store-windows-credential-manager.lease']);
+    });
+    const values = [snapshot('removed', 'zulu'), snapshot('ready', 'alpha'), snapshot('disabled', 'middle')];
+    const pending = snapshot('ready', 'pending');
+    values.push({ ...pending, record: null, journal: { format_version: 1, transaction_id: randomUUID(), operation: 'enroll', phase: 'intent', desired: pending.record } });
+    for (const next of values) {
+      const name = next.record?.name ?? next.journal.desired.name;
+      await lease.runExclusive(WINDOWS_NATIVE_STORE_ID, name, ctx, async () => {
+        assert.equal(await port.load(name, ctx), null);
+        assert.equal(await port.publish(name, null, next, ctx), 'committed');
+      });
+    }
+    const files = fs.readdirSync(nativeRoot), before = [digest(path.join(nativeRoot, WINDOWS_SNAPSHOT_DATABASE)), digest(path.join(nativeRoot, WINDOWS_SNAPSHOT_JOURNAL))];
+    lease.close(); lease = await openWindowsNativeLease(nativeRoot, ctx); port = await createWindowsNativeSnapshots(lease);
+    const calls = [], credentialApi = { assertHealthy() { calls.push('healthy'); }, readCredential() { calls.push('read'); }, writeCredential() { calls.push('write'); }, deleteCredential() { calls.push('delete'); } };
+    const store = WindowsNativeStore.open(credentialApi, lease), reference = { profile_id: values[1].record.profile_id, credential_ref: values[1].record.credential_ref };
+    await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => {
+      const rows = await port.list(ctx);
+      assert.deepEqual(rows.map(entry => entry.name), ['alpha', 'middle', 'pending', 'zulu']);
+      for (const entry of rows) assert.deepEqual(entry.snapshot, values.find(value => (value.record?.name ?? value.journal.desired.name) === entry.name));
+      for (const action of [() => store.read(reference, ctx), () => store.write(reference, 'synthetic-never-written', ctx), () => store.delete(reference, ctx)]) {
+        await assert.rejects(action(), error => error.code === 'windows_native_untrusted');
+      }
+      await assert.rejects(port.load('alpha', ctx), busy);
+      assert.equal(await port.publish('alpha', values[1].revision, snapshot('ready', 'alpha'), ctx), 'not_committed');
+    });
+    assert.deepEqual(calls, []); assert.deepEqual(fs.readdirSync(nativeRoot), files);
+    assert.deepEqual([digest(path.join(nativeRoot, WINDOWS_SNAPSHOT_DATABASE)), digest(path.join(nativeRoot, WINDOWS_SNAPSHOT_JOURNAL))], before);
+    await lease.runExclusive(WINDOWS_NATIVE_STORE_ID, 'alpha', ctx, async () => {
+      await assert.rejects(port.list(ctx), busy);
+      assert.equal(await port.publish('alpha', values[1].revision, snapshot('ready', 'alpha'), ctx), 'not_committed');
+    });
+    const retainedLease = path.join(nativeRoot, `profile-${Buffer.from('middle', 'ascii').toString('hex')}.lease`);
+    fs.writeFileSync(retainedLease, 'retained invalid lease');
+    await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID, ctx, async () => await assert.rejects(port.list(ctx), busy));
+    assert.equal(fs.readFileSync(retainedLease, 'utf8'), 'retained invalid lease');
+    assert.deepEqual([digest(path.join(nativeRoot, WINDOWS_SNAPSHOT_DATABASE)), digest(path.join(nativeRoot, WINDOWS_SNAPSHOT_JOURNAL))], before);
   } finally { lease.close(); }
 });
 
@@ -255,7 +368,10 @@ test('real hot journal with a foreign super-journal footer refuses before SQLite
     fs.appendFileSync(journal,Buffer.concat([marker,name,footer]));
     const before=[digest(database),digest(journal),digest(external)],prototype=DatabaseSync().prototype,prepare=prototype.prepare;let sqlCalls=0;
     prototype.prepare=function(){sqlCalls++;throw new Error('synthetic SQLite must not be reached');};
-    try {await lease.runExclusive(WINDOWS_NATIVE_STORE_ID,'profile-a',ctx,async()=>await assert.rejects(port.load('profile-a',ctx),busy));}
+    try {
+      await lease.runExclusive(WINDOWS_NATIVE_STORE_ID,'profile-a',ctx,async()=>await assert.rejects(port.load('profile-a',ctx),busy));
+      await lease.runMetadataExclusive(WINDOWS_NATIVE_STORE_ID,ctx,async()=>await assert.rejects(port.list(ctx),busy));
+    }
     finally {prototype.prepare=prepare;}
     assert.equal(sqlCalls,0);assert.deepEqual([digest(database),digest(journal),digest(external)],before);assert.deepEqual(fs.readFileSync(external),sentinel);
   } finally {lease.close();}

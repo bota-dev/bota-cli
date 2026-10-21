@@ -1,6 +1,6 @@
 /** Fixed physical cohort; never supplied by a profile or CLI path option. */
 import type { NativeOperationContext } from './native-profile-transaction.js';
-import type { WindowsNativeLeaseAccess } from './windows-native-lease.js';
+import type { WindowsNativeLeaseAccess, WindowsNativeMetadataAccess } from './windows-native-lease.js';
 
 export const WINDOWS_SNAPSHOT_DATABASE = 'native-profiles-v1.sqlite3';
 export const WINDOWS_SNAPSHOT_JOURNAL = `${WINDOWS_SNAPSHOT_DATABASE}-journal`;
@@ -12,6 +12,7 @@ export const WINDOWS_SNAPSHOT_MAX_JOURNAL_BYTES = 128 * 1024 * 1024;
 export const WINDOWS_SNAPSHOT_MAX_PROFILES = 1024;
 
 export type WindowsSnapshotBinding = WindowsNativeLeaseAccess;
+export type WindowsMetadataSnapshotBinding = WindowsNativeMetadataAccess;
 export interface WindowsSnapshotFiles {
   readonly fresh: boolean;
   readonly currentSid: string;
@@ -24,4 +25,7 @@ export interface WindowsSnapshotFiles {
 export interface WindowsSnapshotGuard {
   assertCurrentAccess(context: NativeOperationContext): WindowsSnapshotBinding;
   open(binding: WindowsSnapshotBinding, context: NativeOperationContext): WindowsSnapshotFiles;
+  assertCurrentMetadataAccess(context: NativeOperationContext): WindowsMetadataSnapshotBinding;
+  /** Both fixed files absent is an empty store, without bootstrap or creation. */
+  openMetadata(binding: WindowsMetadataSnapshotBinding, context: NativeOperationContext): WindowsSnapshotFiles | null;
 }

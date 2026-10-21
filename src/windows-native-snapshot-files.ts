@@ -9,10 +9,11 @@ import {
   WINDOWS_SNAPSHOT_APPLICATION_ID, WINDOWS_SNAPSHOT_DATABASE, WINDOWS_SNAPSHOT_JOURNAL,
   WINDOWS_SNAPSHOT_MAX_DATABASE_BYTES, WINDOWS_SNAPSHOT_MAX_JOURNAL_BYTES,
   WINDOWS_SNAPSHOT_MAX_PROFILES, WINDOWS_SNAPSHOT_PAGE_SIZE, WINDOWS_SNAPSHOT_VERSION,
-  type WindowsSnapshotBinding, type WindowsSnapshotFiles, type WindowsSnapshotGuard,
+  type WindowsSnapshotBinding, type WindowsMetadataSnapshotBinding, type WindowsSnapshotFiles, type WindowsSnapshotGuard,
 } from './windows-snapshot-contract.js';
 
-type LeaseAuthority = Pick<WindowsNativeLease, 'assertCurrentAccess'>;
+type LeaseAuthority = Pick<WindowsNativeLease, 'assertCurrentAccess' | 'assertCurrentMetadataAccess'>;
+type SnapshotAccess = WindowsSnapshotBinding | WindowsMetadataSnapshotBinding;
 type Inventory = (directory: string) => readonly string[];
 const STORE_LEASE = 'store-windows-credential-manager.lease';
 const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'ascii');
@@ -70,14 +71,25 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
   assertCurrentAccess(context: NativeOperationContext): WindowsSnapshotBinding {
     if (this.#poisoned) throw new WindowsNativeError('windows_native_poisoned');
     this.api.assertHealthy();
-    return this.lease.assertCurrentAccess(context);
+    const binding = this.lease.assertCurrentAccess(context);
+    if (Object.hasOwn(binding, 'metadataOnly')) refuse();
+    return binding;
   }
 
-  private binding(binding: WindowsSnapshotBinding, context: NativeOperationContext): void {
-    if (this.assertCurrentAccess(context) !== binding || binding.storeId !== WINDOWS_NATIVE_STORE_ID) refuse();
+  assertCurrentMetadataAccess(context: NativeOperationContext): WindowsMetadataSnapshotBinding {
+    if (this.#poisoned) throw new WindowsNativeError('windows_native_poisoned');
+    this.api.assertHealthy();
+    const binding = this.lease.assertCurrentMetadataAccess(context);
+    if (binding.metadataOnly !== true || Object.hasOwn(binding, 'name')) refuse();
+    return binding;
   }
 
-  private inventoryChecked(binding: WindowsSnapshotBinding, context: NativeOperationContext): void {
+  private binding(binding: SnapshotAccess, context: NativeOperationContext): void {
+    const current = 'metadataOnly' in binding ? this.assertCurrentMetadataAccess(context) : this.assertCurrentAccess(context);
+    if (current !== binding || binding.storeId !== WINDOWS_NATIVE_STORE_ID) refuse();
+  }
+
+  private inventoryChecked(binding: SnapshotAccess, context: NativeOperationContext): void {
     this.binding(binding, context);
     let names: readonly string[];
     try { names = this.inventory(binding.rootDirectory); }
@@ -94,19 +106,20 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
       if (filename === WINDOWS_SNAPSHOT_DATABASE || filename === WINDOWS_SNAPSHOT_JOURNAL) continue;
       if (!knownLease(filename)) refuse();
       if (filename !== STORE_LEASE && ++profiles > WINDOWS_SNAPSHOT_MAX_PROFILES) refuse();
-      // The two active share-zero handles were admitted by this exact callback
-      // and cannot be reopened. The lease remains their current authority.
-      if (filename === STORE_LEASE || filename === selectedLease(binding)) continue;
+      // Only handles held by this exact ticket may be skipped. A metadata
+      // ticket holds the namespace alone, so every profile lease is admitted.
+      if (filename === STORE_LEASE || !('metadataOnly' in binding) && filename === selectedLease(binding)) continue;
       const handle = this.api.openDataFile(path.win32.join(binding.rootDirectory, filename), false);
       if (!handle) refuse();
       try { this.fileChecked(handle, filename, binding, context, 0n); }
       finally { this.closeOwned([handle]); }
     }
-    if (!names.includes(STORE_LEASE) || !names.includes(selectedLease(binding))) refuse();
+    if (!names.includes(STORE_LEASE)
+      || !('metadataOnly' in binding) && !names.includes(selectedLease(binding))) refuse();
     this.binding(binding, context);
   }
 
-  private fileChecked(handle: WindowsOwnedHandle, filename: string, binding: WindowsSnapshotBinding,
+  private fileChecked(handle: WindowsOwnedHandle, filename: string, binding: SnapshotAccess,
     context: NativeOperationContext, maximum: bigint): { readonly identity: string; readonly size: bigint } {
     this.binding(binding, context);
     const facts = this.api.facts(handle), expected = `\\\\?\\${path.win32.join(binding.rootDirectory, filename)}`;
@@ -126,7 +139,7 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
     if (failed) throw new WindowsNativeError('windows_native_close_unknown');
   }
 
-  private journalChecked(handle: WindowsOwnedHandle, binding: WindowsSnapshotBinding,
+  private journalChecked(handle: WindowsOwnedHandle, binding: SnapshotAccess,
     context: NativeOperationContext): { readonly identity: string; readonly size: bigint } {
     const before = this.fileChecked(handle, WINDOWS_SNAPSHOT_JOURNAL, binding, context,
       BigInt(WINDOWS_SNAPSHOT_MAX_JOURNAL_BYTES));
@@ -145,6 +158,18 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
   }
 
   open(binding: WindowsSnapshotBinding, context: NativeOperationContext): WindowsSnapshotFiles {
+    if (this.assertCurrentAccess(context) !== binding) refuse();
+    const files = this.openFiles(binding, context);
+    if (!files) refuse();
+    return files;
+  }
+
+  openMetadata(binding: WindowsMetadataSnapshotBinding, context: NativeOperationContext): WindowsSnapshotFiles | null {
+    if (this.assertCurrentMetadataAccess(context) !== binding) refuse();
+    return this.openFiles(binding, context);
+  }
+
+  private openFiles(binding: SnapshotAccess, context: NativeOperationContext): WindowsSnapshotFiles | null {
     this.binding(binding, context);
     if (this.#opened) throw new WindowsNativeError('windows_native_busy');
     this.#opened = true;
@@ -160,6 +185,10 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
       this.binding(binding, context);
       if ((database === null) !== (journal === null)) refuse();
       const fresh = database === null;
+      if (fresh && 'metadataOnly' in binding) {
+        this.inventoryChecked(binding, context); this.#opened = false;
+        return null;
+      }
       if (fresh) {
         database = this.api.openDataFile(filename(WINDOWS_SNAPSHOT_DATABASE), true);
         if (!database) refuse();

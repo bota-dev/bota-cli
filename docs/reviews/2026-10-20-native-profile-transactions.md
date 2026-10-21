@@ -405,3 +405,69 @@ per-case limits; native fixture processes are joined and all eight synthetic
 credential entries are proven absent before delivery. Installed package and
 hosted checks retain independent receipts and do not change the canonical host
 refusal above.
+
+## Metadata inventory and explicit environment-v1 copy
+
+This continuation implements design v0.16 section 6.3.3 and track section 21.
+It adds `auth secure-profiles list` and explicit
+`auth secure-profiles migrate <name> --from-env`, preserving compatibility and
+the canonical-host refusal described above.
+
+Listing uses a distinct live namespace-only ticket with no fabricated profile
+name or profile lease. Credential operations and named snapshot load/publish
+reject that ticket. The native guard validates every persisted profile lease;
+aggregate reads cannot prime the named CAS observation map. Proven absence of
+both fixed metadata files returns an empty inventory without bootstrap. Partial,
+foreign, malformed, oversized or noncanonical state refuses without repair or
+partial output. The complete bounded inventory is validated and sorted before
+projecting state/identity; references, revisions and transaction IDs stay private.
+
+Existing metadata retains the admitted SQLite recovery rules. After verification,
+query_only=ON precedes the aggregate read transaction. Normal hot-journal
+recovery can physically write the admitted pair; metadata-only authority means
+no logical profile publication or secret access. Actual healthy listing preserves
+database/journal bytes, and a hot-journal fixture separately verifies recovery.
+Absent listing creates only the namespace lease, without consuming profile
+capacity. Cancellation/cleanup ambiguity cannot return a partial inventory.
+
+Migration requires explicit origin and environment-only input. Within the same
+bounded lifecycle it reads one validated source snapshot, copies/freezes it,
+checks the target reservation, then acquires the key. Inside the authoritative
+target enrollment lease, current identity must match the captured origin/project
+and organization before IDs, native target access or durable intent. Target
+collisions, including tombstones and races, refuse. Later source replacement or
+removal cannot retarget the destination. This is an explicit captured copy,
+without source deletion, automatic selection, plaintext import or cross-store
+atomic-move claims. The native key ID is freshly verified.
+
+| Requirement | Evidence | Status |
+| --- | --- | --- |
+| Credential-free namespace inventory | Distinct-ticket denial, genuine namespace-only empty listing, bounded full/corrupt inventories and zero credential/identity calls | Matched for the selected native source cohort. |
+| Preserve named authority and CAS | Cross-mode/stale-ticket/context/process exclusion and no-CAS-priming fixtures | Matched; no native credential enumeration introduced. |
+| Explicit verified source copy | Core identity pin before IDs/target access/intent; origin/source/collision/race and real source-byte preservation fixtures | Matched in core/service97 and command18 focused checks on both runtimes; genuine command/native receipts follow separately. |
+| Physical metadata behavior | query_only write refusal, healthy exact-byte preservation, hot-journal and super-journal cases | Matched within existing SQLite/VFS premises; recovery may write admitted physical metadata. |
+| Canonical installed and delegated auth | Existing host ancestor refusal; no enabled grant/token routes | Unverified/unimplemented as previously recorded; these source changes do not close those gates. |
+
+Final native component qualification passes178/179 with one expected platform
+skip on each pinned runtime (Node22 7.336s, Node24 5.669s); strict types pass.
+No real credential or canonical profile is touched by those metadata tests.
+
+Actual controlled command/service/native migration and listing pass on both
+pinned runtimes. A wrong-project key reaches one identity request but zero IDs,
+native credential calls or snapshot publications, preserving initialized DB and
+journal bytes. Valid migration reads each source once, preserves four original
+source files and the legacy canary, and grants exact cleanup ownership only
+after independent marker/key readback. Ready/removed public command listings
+make zero credential/identity/publication calls. Two fresh synthetic credentials
+are removed and independently proven absent, with all handles joined.
+
+Because the shared lease implementation changed, real public-SDK legacy/hosted
+MCP acceptance is repeated against the final source on both runtimes. Metadata
+startup remains network-free, each successful request reidentifies once, and
+both live modes refuse exact credential absence and removed state without HTTP.
+Both fresh credentials are proven absent and all four SDK children exit0.
+Earlier evidence remains unchanged; all twelve synthetic entries created across
+this day's controlled cohorts are proven absent. Canonical enrollment is not
+retried. Final aggregate suites pass528/531 with three expected platform skips,
+zero failures/cancellations, on Node24.19.0 (69.506s) and22.23.2 (80.043s).
+Strict types pass on both; package and hosted qualification remain independent.

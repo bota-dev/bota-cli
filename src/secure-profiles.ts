@@ -1,13 +1,14 @@
 /** Opt-in API-key profiles shared by CLI actions and individual MCP calls. */
 import { performance } from 'node:perf_hooks';
 import { types } from 'node:util';
-import { normalizeProfileOrigin } from './profiles.js';
+import { normalizeProfileOrigin, readEnvironmentProfile, ProfileError, type EnvironmentProfile } from './profiles.js';
 import {
   NativeProfileTransactionError,
   type NativeOperationContext,
   type NativeProfileBinding,
   type NativeProfileRecord,
   type NativeProfileSnapshot,
+  type NativeProfileListEntry,
   type NativeProfileTransactions,
   type NativeResolvedCredential,
   type NativeSelectionOptions,
@@ -27,14 +28,24 @@ export type SecureProfileEnrollment = {
   readonly allowHttpLoopback?: boolean;
 } & ({ readonly key: string; readonly readKey?: never }
   | { readonly key?: never; readonly readKey: (context: NativeOperationContext) => Promise<string> });
+export interface SecureProfileMigration {
+  readonly name: string;
+  readonly apiOrigin: string;
+  readonly allowHttpLoopback?: boolean;
+  /** The explicit migration command supplies environment-mode input only. */
+  readonly readKey: (context: NativeOperationContext) => Promise<string>;
+}
 
 export interface SecureProfileRuntime {
-  readonly engine: Pick<NativeProfileTransactions, 'withCredential' | 'enroll' | 'inspect' | 'remove' | 'recover'>;
+  readonly engine: Pick<NativeProfileTransactions, 'withCredential' | 'enroll' | 'inspect' | 'list' | 'remove' | 'recover'>;
   close(): void | Promise<void>;
 }
 export interface SecureProfileServiceDependencies {
   /** Trusted implementation/test port. Production never accepts a root option. */
   createRuntime(context: NativeOperationContext): Promise<SecureProfileRuntime>;
+  /** Trusted source-reader fixture boundary. Production selects only the
+   * existing environment-v1 location, never legacy config or a caller path. */
+  readEnvironmentProfile?(name: string): Promise<EnvironmentProfile>;
 }
 
 function failure(code: 'profile_invalid_input' | 'profile_key_required'): never {
@@ -63,6 +74,19 @@ function optionsChecked(options: SecureProfileOptions): SecureProfileOptions {
     || (value.timeoutMs as number) < 1 || (value.timeoutMs as number) > 300_000)) failure('profile_invalid_input');
   if (Object.hasOwn(value, 'apiUrlOverride') && typeof value.apiUrlOverride !== 'string') failure('profile_invalid_input');
   return value as SecureProfileOptions;
+}
+function environmentSnapshot(value: unknown, name: string): Readonly<EnvironmentProfile> {
+  try {
+    const data = fields(value, ['name', 'format_version', 'api_origin', 'project_id', 'organization_id', 'credential_source', 'allow_http_loopback']);
+    if (Object.keys(data).length !== 7 || data.name !== name || data.format_version !== 1 || data.credential_source !== 'environment'
+      || typeof data.allow_http_loopback !== 'boolean' || typeof data.api_origin !== 'string'
+      || normalizeProfileOrigin(data.api_origin, data.allow_http_loopback) !== data.api_origin
+      || ![data.project_id, data.organization_id].every(id => typeof id === 'string' && id.length > 0 && Buffer.byteLength(id, 'utf8') <= 2048)) {
+      throw new Error();
+    }
+    return Object.freeze({ name, format_version: 1, api_origin: data.api_origin, project_id: data.project_id as string,
+      organization_id: data.organization_id as string, credential_source: 'environment', allow_http_loopback: data.allow_http_loopback });
+  } catch { throw new NativeProfileTransactionError('profile_invalid_metadata'); }
 }
 function assertContext(context: NativeOperationContext): void {
   try {
@@ -138,10 +162,10 @@ function originSelection(options: SecureProfileOptions, env: Record<string, unkn
 }
 
 export function createSecureProfileService(dependencies: SecureProfileServiceDependencies) {
-  async function execute<T>(name: string, options: SecureProfileOptions, defaultTimeout: number,
+  async function execute<T>(name: string | undefined, options: SecureProfileOptions, defaultTimeout: number,
     work: (runtime: SecureProfileRuntime, context: NativeOperationContext, markMutation: () => void,
       markAction: () => void) => Promise<T>): Promise<T> {
-    nameChecked(name);
+    if (name !== undefined) nameChecked(name);
     const checked = optionsChecked(options);
     const scope = lifecycle(checked, defaultTimeout);
     let runtime: SecureProfileRuntime | undefined, result: T | undefined;
@@ -185,6 +209,7 @@ export function createSecureProfileService(dependencies: SecureProfileServiceDep
   return Object.freeze({
     async run<T>(name: string, options: SecureProfileOptions,
       action: (credential: NativeResolvedCredential, context: NativeOperationContext) => Promise<T>): Promise<T> {
+      nameChecked(name);
       return execute(name, options, 120_000, async (runtime, context, _mutation, markAction) => {
         const checked = optionsChecked(options);
         const env = checked.env ?? process.env;
@@ -242,15 +267,68 @@ export function createSecureProfileService(dependencies: SecureProfileServiceDep
         return runtime.engine.enroll({ name, apiOrigin: origin, allowHttpLoopback: data.allowHttpLoopback as boolean | undefined, key }, context);
       });
     },
+    async migrateEnvironmentProfile(input: SecureProfileMigration, options: SecureProfileOptions = {}): Promise<NativeProfileRecord> {
+      const data = fields(input, ['name', 'apiOrigin', 'allowHttpLoopback', 'readKey']); nameChecked(data.name);
+      if (typeof data.apiOrigin !== 'string' || typeof data.readKey !== 'function'
+        || data.allowHttpLoopback !== undefined && typeof data.allowHttpLoopback !== 'boolean') failure('profile_invalid_input');
+      let origin: string;
+      try { origin = normalizeProfileOrigin(data.apiOrigin, data.allowHttpLoopback as boolean | undefined); }
+      catch { return failure('profile_invalid_input'); }
+      const checked = optionsChecked(options), name = data.name;
+      const assertOrigins = () => {
+        const selected = originSelection(checked, checked.env ?? process.env);
+        if (Object.hasOwn(selected, 'apiOriginOverride') && selected.apiOriginOverride !== origin) {
+          throw new NativeProfileTransactionError('profile_origin_mismatch');
+        }
+      };
+      assertOrigins();
+      return execute(name, checked, 30_000, async (runtime, context, markMutation) => {
+        let value: EnvironmentProfile;
+        try { value = await (dependencies.readEnvironmentProfile ?? readEnvironmentProfile)(name); }
+        catch (error) {
+          assertContext(context);
+          const missing = error && typeof error === 'object' && !types.isProxy(error) && error instanceof ProfileError
+            && Object.getOwnPropertyDescriptor(error, 'code')?.value === 'profile_not_found';
+          throw new NativeProfileTransactionError(missing ? 'profile_not_found' : 'profile_invalid_metadata');
+        }
+        assertContext(context);
+        // Capture once. Later changes/removal of the v1 source never retarget
+        // the destination or turn this explicit copy into a cross-store move.
+        const source = environmentSnapshot(value, name);
+        if (source.api_origin !== origin) throw new NativeProfileTransactionError('profile_origin_mismatch');
+        if (await runtime.engine.inspect(name, context) !== null) throw new NativeProfileTransactionError('profile_exists');
+        assertContext(context);
+        let key: unknown;
+        try { key = await (data.readKey as SecureProfileMigration['readKey'])(context); }
+        catch (error) {
+          if (error && typeof error === 'object' && !types.isProxy(error) && error instanceof NativeProfileTransactionError
+            && (error.code === 'profile_cancelled' || error.code === 'profile_deadline')) {
+            throw new NativeProfileTransactionError(error.code, error.recovery_required, error.operation_may_have_executed);
+          }
+          return failure('profile_key_required');
+        }
+        assertContext(context);
+        if (typeof key !== 'string' || !/^[\x21-\x7e]{1,2560}$/.test(key)) failure('profile_key_required');
+        assertOrigins(); markMutation();
+        return runtime.engine.enroll({ name, apiOrigin: origin, allowHttpLoopback: data.allowHttpLoopback as boolean | undefined, key,
+          expectedEnrollmentBinding: Object.freeze({ api_origin: source.api_origin, project_id: source.project_id, organization_id: source.organization_id }) }, context);
+      });
+    },
+    async list(options: SecureProfileOptions = {}): Promise<readonly NativeProfileListEntry[]> {
+      return execute(undefined, options, 30_000, (runtime, context) => runtime.engine.list(context));
+    },
     async inspect(name: string, options: SecureProfileOptions = {}): Promise<NativeProfileSnapshot | null> {
+      nameChecked(name);
       return execute(name, options, 30_000, (runtime, context) => runtime.engine.inspect(name, context));
     },
     async remove(name: string, options: SecureProfileOptions = {}): Promise<NativeProfileRecord> {
+      nameChecked(name);
       return execute(name, options, 30_000, (runtime, context, markMutation) => {
         markMutation(); return runtime.engine.remove(name, context);
       });
     },
     async recover(name: string, options: SecureProfileOptions = {}): Promise<NativeProfileRecord> {
+      nameChecked(name);
       return execute(name, options, 30_000, (runtime, context, markMutation) => {
         markMutation(); return runtime.engine.recover(name, context);
       });
@@ -265,6 +343,8 @@ const production = createSecureProfileService({ async createRuntime(context) {
 } });
 export const runWithSecureProfile = production.run;
 export const enrollSecureProfile = production.enroll;
+export const migrateEnvironmentProfile = production.migrateEnvironmentProfile;
+export const listSecureProfiles = production.list;
 export const inspectSecureProfile = production.inspect;
 export const removeSecureProfile = production.remove;
 export const recoverSecureProfile = production.recover;

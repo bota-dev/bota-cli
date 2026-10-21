@@ -6,7 +6,7 @@ import { decodeNativeProfileSnapshotBytes, encodeNativeProfileSnapshot, NATIVE_P
 import { NativeProfileTransactionError, type NativeOperationContext, type NativeProfileSnapshot, type NativeSnapshotPort } from './native-profile-transaction.js';
 import { WINDOWS_SNAPSHOT_APPLICATION_ID, WINDOWS_SNAPSHOT_DATABASE, WINDOWS_SNAPSHOT_MAX_DATABASE_BYTES,
   WINDOWS_SNAPSHOT_MAX_PROFILES, WINDOWS_SNAPSHOT_PAGE_SIZE, WINDOWS_SNAPSHOT_VERSION,
-  type WindowsSnapshotBinding, type WindowsSnapshotFiles, type WindowsSnapshotGuard } from './windows-snapshot-contract.js';
+  type WindowsSnapshotBinding, type WindowsMetadataSnapshotBinding, type WindowsSnapshotFiles, type WindowsSnapshotGuard } from './windows-snapshot-contract.js';
 import type { WindowsNativeLease } from './windows-native-lease.js';
 
 interface Statement {
@@ -171,7 +171,7 @@ export class WindowsNativeSnapshots implements NativeSnapshotPort {
     if (this.poisoned) fail();
     active(context);
     const binding = this.guard.assertCurrentAccess(context);
-    if (!binding || typeof binding !== 'object' || binding.name !== name || binding.storeId !== STORE
+    if (!binding || typeof binding !== 'object' || Object.hasOwn(binding, 'metadataOnly') || binding.name !== name || binding.storeId !== STORE
       || typeof name !== 'string' || !/^[a-z0-9-]{1,64}$/.test(name) || this.uncertain.has(binding)) fail();
     return binding;
   }
@@ -179,10 +179,22 @@ export class WindowsNativeSnapshots implements NativeSnapshotPort {
     if (this.guard.assertCurrentAccess(context) !== binding) fail();
     active(context);
   }
+  private metadataBinding(context: NativeOperationContext): WindowsMetadataSnapshotBinding {
+    if (this.poisoned) fail();
+    active(context);
+    const binding = this.guard.assertCurrentMetadataAccess(context);
+    if (!binding || typeof binding !== 'object' || binding.metadataOnly !== true
+      || Object.hasOwn(binding, 'name') || binding.storeId !== STORE) fail();
+    return binding;
+  }
+  private metadataCurrent(binding: WindowsMetadataSnapshotBinding, context: NativeOperationContext): void {
+    if (this.guard.assertCurrentMetadataAccess(context) !== binding) fail();
+    active(context);
+  }
   private closeDatabase(database: Database): void {
     try { database.close(); } catch { this.poisoned = true; fail(); }
   }
-  private database(binding: WindowsSnapshotBinding, files: WindowsSnapshotFiles): Database {
+  private database(binding: { readonly rootDirectory: string }, files: WindowsSnapshotFiles): Database {
     header(files);
     if (typeof files.currentSid !== 'string' || files.currentSid.length > 184 || !/^S-1-(?:\d+-){1,15}\d+$/.test(files.currentSid)) fail();
     const filename = path.win32.join(binding.rootDirectory, WINDOWS_SNAPSHOT_DATABASE);
@@ -202,6 +214,45 @@ export class WindowsNativeSnapshots implements NativeSnapshotPort {
     const database = new DatabaseSync(filename, { allowExtension: false, enableDoubleQuotedStringLiterals: false, timeout: 0 });
     try { database.enableDefensive?.(true); configure(database); if (files.fresh) initialize(database, files.currentSid); verify(database, files.currentSid); return database; }
     catch (error) { this.closeDatabase(database); throw error; }
+  }
+
+  /** Namespace-only metadata inventory. No credentials, bootstrap, or named
+   * compare-and-publish observations are created by this read. */
+  async list(context: NativeOperationContext): Promise<readonly { readonly name: string; readonly snapshot: NativeProfileSnapshot }[]> {
+    let binding: WindowsMetadataSnapshotBinding | undefined, files: WindowsSnapshotFiles | null | undefined;
+    let db: Database | undefined, failed = false;
+    const result: { readonly name: string; readonly snapshot: NativeProfileSnapshot }[] = [];
+    try {
+      binding = this.metadataBinding(context);
+      files = this.guard.openMetadata(binding, context); this.metadataCurrent(binding, context);
+      if (files) {
+        if (files.fresh) fail();
+        db = this.database(binding, files); files.validate(); this.metadataCurrent(binding, context);
+        db.exec('PRAGMA query_only=ON');
+        if (pragma(db, 'query_only') !== 1) fail();
+        db.exec('BEGIN');
+        verify(db, files.currentSid);
+        for (const value of db.prepare('SELECT name,revision,snapshot FROM native_profiles ORDER BY name COLLATE BINARY LIMIT 1025').iterate()) {
+          const data = row(value);
+          if (result.length >= WINDOWS_SNAPSHOT_MAX_PROFILES || typeof data.name !== 'string'
+            || !/^[a-z0-9-]{1,64}$/.test(data.name) || !(data.snapshot instanceof Uint8Array)) fail();
+          const snapshot = decodeNativeProfileSnapshotBytes(data.snapshot, data.name, STORE);
+          if (snapshot.revision !== data.revision) fail();
+          result.push(Object.freeze({ name: data.name, snapshot }));
+          this.metadataCurrent(binding, context);
+        }
+        db.exec('COMMIT'); files.validate(); this.metadataCurrent(binding, context);
+      }
+    } catch { failed = true; }
+    finally {
+      if (db?.isTransaction) { try { db.exec('ROLLBACK'); } catch { failed = true; } }
+      try { if (db) this.closeDatabase(db); } catch { failed = true; }
+      try { files?.validate(); } catch { failed = true; }
+      try { files?.close(); } catch { failed = true; this.poisoned = true; }
+    }
+    if (failed || !binding) fail();
+    this.metadataCurrent(binding, context);
+    return Object.freeze(result);
   }
 
   async load(name: string, context: NativeOperationContext): Promise<unknown> {

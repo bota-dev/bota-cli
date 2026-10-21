@@ -24,6 +24,9 @@ export class SecureProfileCommandError extends Error {
 export interface SecureProfileCommandService {
   enrollSecureProfile(input: { name: string; apiOrigin: string; allowHttpLoopback?: boolean;
     readKey: (context: NativeOperationContext) => Promise<string> }, options?: { signal: AbortSignal }): Promise<NativeProfileRecord>;
+  migrateEnvironmentProfile(input: { name: string; apiOrigin: string; allowHttpLoopback?: boolean;
+    readKey: (context: NativeOperationContext) => Promise<string> }, options?: { signal: AbortSignal }): Promise<NativeProfileRecord>;
+  listSecureProfiles(options?: { signal: AbortSignal }): Promise<readonly { name: string; snapshot: NativeProfileSnapshot }[]>;
   inspectSecureProfile(name: string, options?: { signal: AbortSignal }): Promise<NativeProfileSnapshot | null>;
   removeSecureProfile(name: string, options?: { signal: AbortSignal }): Promise<NativeProfileRecord>;
   recoverSecureProfile(name: string, options?: { signal: AbortSignal }): Promise<NativeProfileRecord>;
@@ -59,6 +62,12 @@ function projection(record: NativeProfileRecord): Record<string, unknown> {
     credential_source: record.store_id, allow_http_loopback: record.allow_http_loopback, state: record.state };
 }
 
+function snapshotProjection(snapshot: NativeProfileSnapshot): Record<string, unknown> {
+  const record = snapshot.record ?? snapshot.journal!.desired;
+  return { ...projection(record), recovery_required: snapshot.journal !== null,
+    ...(snapshot.journal && { pending_operation: snapshot.journal.operation }) };
+}
+
 async function boundary(work: (signal: AbortSignal) => Promise<void>): Promise<void> {
   const controller = new AbortController(); let interrupt: number | undefined;
   const sigint = () => { interrupt = 130; controller.abort(); };
@@ -82,6 +91,17 @@ export function registerSecureProfiles(auth: Command, program: Command, service:
       printError(new SecureProfileCommandError('invalid_secure_profile_command'), Boolean(program.opts()['json']));
     } });
   auth.addCommand(profiles);
+  const selectedKey = (mode: SecureKeyInputOptions['mode']) => async (context: NativeOperationContext) => {
+    context.budget.assertActive();
+    let key: string;
+    try { key = await readSecureKey({ ...input, mode, signal: context.signal }); }
+    catch (error) {
+      if (error instanceof SecureKeyInputError && error.code === 'secure_key_cancelled') throw new NativeProfileTransactionError('profile_cancelled');
+      throw error;
+    }
+    context.budget.assertActive();
+    return key;
+  };
   profiles.command('add <name>').allowExcessArguments(false)
     .description('Verify and securely enroll a key; never accepts key arguments or silently imports legacy credentials')
     .option('--key-stdin', 'Read one API key from piped standard input')
@@ -96,17 +116,18 @@ export function registerSecureProfiles(auth: Command, program: Command, service:
       }
       const mode = options.keyStdin ? 'stdin' : options.keyPrompt ? 'prompt' : 'environment';
       const record = await service.enrollSecureProfile({ name, apiOrigin, allowHttpLoopback: options.allowHttpLoopback,
-        readKey: async context => {
-          context.budget.assertActive();
-          let key: string;
-          try { key = await readSecureKey({ ...input, mode, signal: context.signal }); }
-          catch (error) {
-            if (error instanceof SecureKeyInputError && error.code === 'secure_key_cancelled') throw new NativeProfileTransactionError('profile_cancelled');
-            throw error;
-          }
-          context.budget.assertActive();
-          return key;
-        } }, { signal });
+        readKey: selectedKey(mode) }, { signal });
+      show(projection(record));
+    }));
+  profiles.command('migrate <name>').allowExcessArguments(false)
+    .description('Copy an existing environment-only profile into secure storage with a verified matching key; preserve the source metadata')
+    .requiredOption('--from-env', 'Explicitly enroll BOTA_API_KEY for the existing environment profile')
+    .option('--allow-http-loopback', 'Match the source profile explicit literal-loopback HTTP setting')
+    .action(async (name: string, options: { allowHttpLoopback?: boolean }) => boundary(async signal => {
+      const apiOrigin = program.opts()['apiUrl'] as string | undefined;
+      if (apiOrigin === undefined) throw new SecureProfileCommandError('secure_profile_api_url_required');
+      const record = await service.migrateEnvironmentProfile({ name, apiOrigin, allowHttpLoopback: options.allowHttpLoopback,
+        readKey: selectedKey('environment') }, { signal });
       show(projection(record));
     }));
   profiles.command('show <name>').allowExcessArguments(false)
@@ -114,9 +135,14 @@ export function registerSecureProfiles(auth: Command, program: Command, service:
     .action(async (name: string) => boundary(async signal => {
       const snapshot = await service.inspectSecureProfile(name, { signal });
       if (snapshot === null) { show({ name, state: 'absent' }); return; }
-      const record = snapshot.record ?? snapshot.journal!.desired;
-      show({ ...projection(record), recovery_required: snapshot.journal !== null,
-        ...(snapshot.journal && { pending_operation: snapshot.journal.operation }) });
+      show(snapshotProjection(snapshot));
+    }));
+  profiles.command('list').allowExcessArguments(false)
+    .description('List non-secret secure profile metadata without reading a key or contacting the API')
+    .action(async () => boundary(async signal => {
+      const entries = await service.listSecureProfiles({ signal });
+      const sorted = [...entries].sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+      show(sorted.map(entry => snapshotProjection(entry.snapshot)));
     }));
   profiles.command('remove <name>').allowExcessArguments(false)
     .description('Disable selection and remove the exact local credential; does not revoke the project API key')

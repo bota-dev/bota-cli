@@ -11,10 +11,14 @@ export interface WindowsNativeLeaseAccess {
   readonly storeId: typeof WINDOWS_NATIVE_STORE_ID;
   readonly rootDirectory: string;
 }
-interface LeaseTicket {
-  readonly context: NativeOperationContext;
-  readonly binding: WindowsNativeLeaseAccess;
+export interface WindowsNativeMetadataAccess {
+  readonly metadataOnly: true;
+  readonly storeId: typeof WINDOWS_NATIVE_STORE_ID;
+  readonly rootDirectory: string;
 }
+type LeaseTicket =
+  | { readonly kind: 'profile'; readonly context: NativeOperationContext; readonly binding: WindowsNativeLeaseAccess }
+  | { readonly kind: 'metadata-only'; readonly context: NativeOperationContext; readonly binding: WindowsNativeMetadataAccess };
 export class WindowsNativeLeaseContextError extends Error {
   declare readonly code: 'windows_native_cancelled' | 'windows_native_deadline';
   constructor(code: 'windows_native_cancelled' | 'windows_native_deadline') {
@@ -102,12 +106,26 @@ export class WindowsNativeLease implements NativeLeasePort {
   /** Adapter authority exists only in this callback's async chain. Returning a
    * binding does not grant authority: adapters must recheck on every operation.
    * Descendants retain their old ALS value, but revocation makes it unusable. */
-  assertCurrentAccess(context: NativeOperationContext): WindowsNativeLeaseAccess {
+  private currentTicket(context: NativeOperationContext): LeaseTicket {
     this.healthy(); active(context);
     const ticket = this.#scope.getStore();
     if (!this.#active || !ticket || ticket !== this.#ticket || ticket.context !== context) {
       throw new WindowsNativeError('windows_native_untrusted');
     }
+    return ticket;
+  }
+
+  assertCurrentAccess(context: NativeOperationContext): WindowsNativeLeaseAccess {
+    const ticket = this.currentTicket(context);
+    if (ticket.kind !== 'profile') throw new WindowsNativeError('windows_native_untrusted');
+    return ticket.binding;
+  }
+
+  /** Namespace ownership grants metadata access only: no selected profile,
+   * credential authority or named snapshot observation exists in this ticket. */
+  assertCurrentMetadataAccess(context: NativeOperationContext): WindowsNativeMetadataAccess {
+    const ticket = this.currentTicket(context);
+    if (ticket.kind !== 'metadata-only') throw new WindowsNativeError('windows_native_untrusted');
     return ticket.binding;
   }
 
@@ -115,20 +133,35 @@ export class WindowsNativeLease implements NativeLeasePort {
     this.healthy(); active(context);
     if (storeId !== WINDOWS_NATIVE_STORE_ID || typeof name !== 'string' || !/^[a-z0-9-]{1,64}$/.test(name)
       || typeof work !== 'function') throw new WindowsNativeError('windows_native_untrusted');
+    return this.runOwned(context, name, work);
+  }
+
+  async runMetadataExclusive<T>(storeId: string, context: NativeOperationContext, work: () => Promise<T>): Promise<T> {
+    this.healthy(); active(context);
+    if (storeId !== WINDOWS_NATIVE_STORE_ID || typeof work !== 'function') throw new WindowsNativeError('windows_native_untrusted');
+    return this.runOwned(context, undefined, work);
+  }
+
+  private async runOwned<T>(context: NativeOperationContext, name: string | undefined, work: () => Promise<T>): Promise<T> {
     if (this.#active) throw new WindowsNativeError('windows_native_busy');
     this.#active = true;
     const handles: WindowsOwnedHandle[] = [];
     try {
       // Existing non-secret lease files persist. Kernel handle ownership, not
       // file existence/age/PID, establishes exclusion across all sessions.
-      for (const basename of ['store-windows-credential-manager.lease', `profile-${Buffer.from(name, 'ascii').toString('hex')}.lease`]) {
+      const names = ['store-windows-credential-manager.lease'];
+      if (name !== undefined) names.push(`profile-${Buffer.from(name, 'ascii').toString('hex')}.lease`);
+      for (const basename of names) {
         this.healthy(); active(context);
         const filename = path.win32.join(this.rootDirectory, basename);
         const handle = this.api.openLease(filename); handles.push(handle);
         assertFacts(this.api, handle, filename, 'private-file'); active(context);
       }
-      const ticket: LeaseTicket = Object.freeze({ context,
-        binding: Object.freeze({ name, storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: this.rootDirectory }) });
+      const ticket: LeaseTicket = name === undefined
+        ? Object.freeze({ kind: 'metadata-only', context,
+          binding: Object.freeze({ metadataOnly: true, storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: this.rootDirectory }) })
+        : Object.freeze({ kind: 'profile', context,
+          binding: Object.freeze({ name, storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: this.rootDirectory }) });
       this.#ticket = ticket;
       const result = await this.#scope.run(ticket, work);
       active(context);

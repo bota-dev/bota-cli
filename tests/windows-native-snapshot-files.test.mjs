@@ -25,8 +25,10 @@ function databaseBytes() {
   bytes.writeUInt32BE(1, 60); bytes.writeUInt32BE(WINDOWS_SNAPSHOT_APPLICATION_ID, 68);
   return bytes;
 }
-function harness(existing = false) {
-  const ctx = context(), binding = Object.freeze({ name: 'work', storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: root });
+function harness(existing = false, metadata = false) {
+  const ctx = context(), binding = Object.freeze(metadata
+    ? { metadataOnly: true, storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: root }
+    : { name: 'work', storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: root });
   const files = new Map(), handles = new Map(), calls = [];
   let sequence = 0;
   const h = { ctx, binding, files, handles, calls, live: true, fault: undefined, closed: [], accessCount: 0 };
@@ -35,11 +37,15 @@ function harness(existing = false) {
     files.set(name, file); return file;
   };
   h.entry = entry;
-  entry(storeLease); entry(profileLease(binding.name));
+  entry(storeLease); if (!metadata) entry(profileLease(binding.name));
   if (existing) { entry(DATABASE, databaseBytes()); entry(JOURNAL, Buffer.alloc(512)); }
   h.lease = { assertCurrentAccess(value) {
     h.accessCount++;
-    if (!h.live || value !== ctx) throw new WindowsNativeError('windows_native_untrusted');
+    if (!h.live || value !== ctx || metadata) throw new WindowsNativeError('windows_native_untrusted');
+    return binding;
+  }, assertCurrentMetadataAccess(value) {
+    h.accessCount++;
+    if (!h.live || value !== ctx || !metadata) throw new WindowsNativeError('windows_native_untrusted');
     return binding;
   } };
   h.api = {
@@ -91,6 +97,51 @@ function harness(existing = false) {
   h.guard = new WindowsNativeSnapshotGuard(h.lease, h.api, h.inventory);
   return h;
 }
+
+test('metadata-only empty inventory returns null without creating or flushing fixed files', () => {
+  const h = harness(false, true);
+  assert.equal(h.guard.openMetadata(h.binding, h.ctx), null);
+  assert.deepEqual([...h.files.keys()], [storeLease]);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'open'), [['open', DATABASE, false], ['open', JOURNAL, false]]);
+  assert.equal(h.calls.some(call => call[0] === 'flush'), false);
+  assert.throws(() => h.guard.open(h.binding, h.ctx), errorCode('windows_native_untrusted'));
+  assert.throws(() => h.guard.openMetadata({ ...h.binding }, h.ctx), errorCode('windows_native_untrusted'));
+  assert.equal(h.guard.openMetadata(h.binding, h.ctx), null);
+});
+
+test('metadata-only admission validates every persisted profile lease without a selected-name exemption', () => {
+  const h = harness(true, true);
+  const first = profileLease('alpha'), last = profileLease('zulu'); h.entry(first); h.entry(last);
+  const files = h.guard.openMetadata(h.binding, h.ctx);
+  assert.equal(files.fresh, false); files.validate(); files.close();
+  for (const name of [first, last]) assert.ok(h.calls.some(call => call[0] === 'open' && call[1] === name));
+  h.files.get(first).bytes = Buffer.from('retained');
+  assert.throws(() => h.guard.openMetadata(h.binding, h.ctx), errorCode('windows_native_untrusted'));
+  assert.equal(h.files.get(first).bytes.toString(), 'retained');
+  assert.equal(h.calls.some(call => call[0] === 'open' && call[2] === true), false);
+});
+
+for (const fault of ['missing-database', 'missing-journal', 'zero-database', 'foreign-header', 'journal-footer', 'unknown-entry']) {
+  test(`metadata-only ${fault} refuses without creation or file mutation`, () => {
+    const h = harness(true, true);
+    if (fault === 'missing-database') h.files.delete(DATABASE);
+    else if (fault === 'missing-journal') h.files.delete(JOURNAL);
+    else if (fault === 'zero-database') h.files.get(DATABASE).bytes = Buffer.alloc(0);
+    else if (fault === 'foreign-header') h.files.get(DATABASE).bytes[68] = 0;
+    else if (fault === 'journal-footer') h.files.get(JOURNAL).bytes = Buffer.concat([Buffer.alloc(8), journalMagic]);
+    else h.entry('unrecognized');
+    const before = [...h.files.values()].map(file => [file.name, Buffer.from(file.bytes)]);
+    assert.throws(() => h.guard.openMetadata(h.binding, h.ctx), errorCode('windows_native_untrusted'));
+    assert.deepEqual([...h.files.values()].map(file => [file.name, file.bytes]), before);
+    assert.equal(h.calls.some(call => call[0] === 'open' && call[2] === true || call[0] === 'flush'), false);
+  });
+}
+
+test('named snapshot ownership never grants aggregate metadata access', () => {
+  const h = harness(true);
+  assert.throws(() => h.guard.openMetadata(h.binding, h.ctx), errorCode('windows_native_untrusted'));
+  assert.equal(h.calls.some(call => call[0] === 'open'), false);
+});
 
 test('portable fresh pair uses only live root/fixed names, exclusive creation, both flushes and one reverse cleanup', () => {
   const h = harness(), files = h.guard.open(h.binding, h.ctx);
