@@ -136,18 +136,78 @@ could lose its recovery-required classification. The final tests exercise all
 three corrections. No remaining source blocker was found for this bounded
 cohort.
 
-## Next adapter gates
+## Snapshot bytes and Windows lease continuation
 
-The next increment must supply qualified durable filesystem CAS and a private
-kernel lease, then an exact-reference Windows Credential Manager adapter and
-process lifecycle protocol. Owner/DACL/reparse checks, bounded stdin framing,
-secret-free compilation, descendant cleanup after timeout or parent death,
-real-store interruption recovery and installed-package behavior remain
-unverified. A PowerShell/C# helper's mere termination is insufficient evidence
-that all compiler/helper descendants joined or that native state is known.
+The next bounded source slice follows design v0.13 section 6.3.2 and implementation
+track section 18. `native-profile-codec.ts` supplies fixed whitelisted JSON order,
+UTF-8 and exactly one trailing LF, with a 24-KiB inclusive limit. Strict core
+state validation and exact canonical-byte equality refuse duplicate names,
+alternate spelling/order/whitespace, BOM and invalid UTF-8. Owned copies reject
+shared/proxied storage without calling input hooks. Opaque identifier code units
+retain the core contract; this is Bota encoding, not a general JSON standard.
+Twenty-nine focused cases pass on both Node22.23.2 and24.19.0.
 
-Only after those gates may native enrollment, per-invocation CLI/MCP resolution
-and explicit migration be wired. The current MCP startup credential snapshot
-cannot establish this new per-invocation lease contract. Delegated Platform
-login, public CLI licensing/publication, live-auth acceptance and physical-device
-acceptance remain separate work.
+`windows-native-api.ts` and `windows-native-lease.ts` add an explicit factory for
+Windows x64/local NTFS. Koffi 3.3.3 is exact in manifest/lock, with unchanged prior
+locked entries and exact optional platform versions. Bootstrap uses the loaded
+Windows kernel and checks the actual inbox before loading the fixed security DLL;
+hosts outside `C:\Windows\System32` refuse. DLL path/owner/DACL and filesystem
+attestation follow. Native diagnostic/loader overrides and Electron packaging
+refuse before Koffi evaluation. Trusted Node/installed dependencies, OS and admin
+code remain premises; this is not a hostile-same-user sandbox.
+
+The root is a runtime-immutable callsite capability. Hold non-reparse ancestry
+and root handles without delete sharing through the session. Ancestors may allow
+creating unrelated children, but untrusted path replacement/retag/authority
+changes refuse. A new private leaf gets an exact protected current-user/SYSTEM/
+Administrators full-control DACL; an existing differing leaf refuses without
+repair. Existing empty, single-link private lease files persist. Share-zero store
+then hex-encoded profile handles establish ownership through callback settlement;
+file existence, timestamps and PIDs never do. Reverse cleanup retires handles
+before one close attempt; ambiguity poisons further process admission.
+
+Tests use injected ports and only fresh synthetic directories. Actual Windows
+cases verify private/inherited/Everyone DACL handling, junctions, nonempty/link/
+directory collisions, two-process exclusion across profiles, cancellation,
+normal closure and forced-owner death/reacquisition without stale-file deletion.
+Isolated FFI faults verify fixed private diagnostics, process poisoning and
+release of a just-acquired share-zero handle before its child exits. An opaque
+startup exception after an allocating call can retain an unknown resource until
+restart; the factory fails closed rather than guessing a numeric handle or
+retrying. That case is tested in an isolated child, whose exit owns release.
+The final lease suite passes on Node22.23.2 and24.19.0: 24 cases, 23 passed and
+one expected Linux-refusal skip on Windows. Types pass on both runtimes. No
+hosted Windows or other operating-system acceptance is inferred.
+
+Native calls are synchronous and nonpreemptible. Budget/signal checks surround
+high-level native operations and callback settlement, not every constituent FFI
+call. Normal cancellation joins known cleanup, but stalled OS calls and unknown
+startup resources do not satisfy a universal hard deadline/all-resource-join
+claim. The engine's complete bounded-port target remains partial at that edge.
+
+| Requirement | Implementation/evidence | Current status |
+|---|---|---|
+| One bounded strict snapshot wire | Canonical byte codec, golden/alias/malformed/ownership/state cases | matched in pure source; persistence absent |
+| Kernel ownership held through callback | Actual share-zero child exclusion and process-death/reuse; reverse-close fault cases | matched for the declared local Windows cohort |
+| Trusted fixed filesystem namespace | Immutable root, handle ancestry/final-path/NTFS/DACL/reparse checks and actual refusal fixtures | matched within trusted installed runtime/OS/admin premises |
+| Private native failures and unknown cleanup | Fixed wrappers, one-attempt retirement, still-live-child reacquisition and startup poison fixture | partial: unknown startup resources require process restart; no universal OS preemption |
+| Secure durable credentials used by CLI/MCP | No Credential Manager signatures, snapshot CAS, provider or command registration | not implemented; no real credentials or owner profiles exercised |
+
+The selected in-process binding replaces the earlier PowerShell/C# helper
+proposal for this cohort, avoiding helper/compiler descendants. Independent
+fresh consumers on both Node versions execute Koffi's normal installation hook,
+select the same prebuilt, preserve the frozen lock and pass fixed-DLL call/exit
+probes. The native payload SHA-256 is
+`f7af4982457657d2e7ad46acb076614ed7122d6efbdbfbc75f21ec12681fa121`.
+Main and platform manifests declare MIT; full MIT notices were inspected in the
+parent Koffi distribution. The platform archive has no separate license file.
+No compiler output/fallback occurs in these selected installations. This does
+not certify other platforms, source builds or installed credential enrollment.
+
+Durable filesystem CAS and an exact-reference Windows Credential Manager adapter,
+real-store interruption recovery and installed native behavior remain gates.
+Only then may enrollment, per-invocation CLI/MCP resolution and explicit migration
+be wired. The current MCP startup credential snapshot cannot establish the new
+lease contract. Delegated Platform login, public CLI licensing/publication and
+live-auth acceptance remain separate. Aggregate source/package/hosted receipts
+are recorded with the existing implementation track, not inferred here.
