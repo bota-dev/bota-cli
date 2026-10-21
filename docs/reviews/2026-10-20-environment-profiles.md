@@ -4,8 +4,10 @@ This increment implements the first bounded slice of Developer Toolchain
 Design section 6 and implementation task T06: explicit environment-backed
 project profiles shared by terminal commands and local MCP. Native credential
 storage, legacy migration and delegated Platform login remain separate work.
-The existing CLI source-license publication gate is unchanged; the owner's MIT
-decision applies to the API SDK, not this CLI.
+At this increment's October 20 baseline, the owner's MIT decision covered the
+API SDK only. Separate owner approval on October 21 now licenses the CLI under
+MIT; the [preview release review](2026-10-19-cli-preview-release.md) records the
+remaining exact-source publication gates.
 
 ## Frozen cohort
 

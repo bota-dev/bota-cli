@@ -57,6 +57,14 @@ try {
   assert.deepEqual(await readFile(join(consumer, 'package-lock.json')), frozenLock, 'frozen consumer installation cannot rewrite its lock');
   const installed = JSON.parse(await readFile(join(consumer, 'node_modules/@bota.dev/cli/package.json'), 'utf8'));
   assert.equal(installed.version, pkg.version); assert.deepEqual(installed.dependencies, pkg.dependencies);
+  assert.equal(installed.license, pkg.license, 'installed source-license identifier must match the package manifest');
+  if (provenance.source_license) {
+    const license = await readFile(join(root, 'LICENSE'));
+    assert.equal(provenance.source_license.identifier, pkg.license);
+    assert.equal(sha256(license), provenance.source_license.sha256, 'source license must match its provenance digest');
+    assert.deepEqual(await readFile(join(consumer, 'node_modules/@bota.dev/cli/LICENSE')), license,
+      'the installed package must retain the exact source license grant');
+  }
   const installedProvenanceBytes = await readFile(join(consumer, 'node_modules/@bota.dev/cli/dist/release.json'));
   assert.deepEqual(installedProvenanceBytes, provenanceBytes);
   const installedProvenance = JSON.parse(installedProvenanceBytes);
@@ -117,6 +125,8 @@ try {
   assert.equal(calls.length, beforeRemoval, 'metadata list/removal must not contact the API');
   assert.deepEqual(JSON.parse((await cli(['auth', 'profiles', 'list', '--json'])).stdout), []);
   const consumerLock = JSON.parse(frozenLock);
+  assert.equal(consumerLock.packages['node_modules/@bota.dev/cli'].license, pkg.license,
+    'the installed consumer lock must retain the source-license identifier');
   for (const [name, version] of Object.entries(pkg.dependencies)) assert.equal(consumerLock.packages[`node_modules/${name}`]?.version, version);
   await run(process.execPath, [join(root, 'scripts/check-licenses.mjs'), join(consumer, 'node_modules')]);
   const resolved = Object.fromEntries(Object.entries(consumerLock.packages).filter(([name]) => name).map(([name, data]) => [name, { version: data.version, integrity: data.integrity, license: data.license }]));
@@ -129,7 +139,7 @@ try {
     node: process.version, npm: (await npm(['--version'])).stdout.trim(),
     consumer_environment_keys: Object.keys(env).sort(),
     consumer_lock_sha256: createHash('sha256').update(frozenLock).digest('hex'), resolved_dependencies: resolved,
-    checks: ['installed-version', 'source-version', 'installed-help', 'installed-hosted-mode-help', 'installed-secure-profile-help-no-native-bootstrap',
+    checks: ['installed-version', 'source-version', 'installed-source-license', 'installed-help', 'installed-hosted-mode-help', 'installed-secure-profile-help-no-native-bootstrap',
       'installed-secure-selector-refusal', 'installed-secure-origin-refusal-before-storage', 'synthetic-empty-scope-identity',
       'installed-secure-migration-explicit-input',
       'installed-environment-profile-enrollment', 'installed-profile-status-one-preflight', 'installed-profile-local-list-removal',

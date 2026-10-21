@@ -367,7 +367,7 @@ outer diagnostic boundary, with ordinary interrupt exit statuses preserved.
 | Genuine durable enrollment/recovery | Both pinned runtimes use actual WinCred, native lease/file guard and SQLite in fresh protected workspace fixtures | Six synthetic writes, independent exact marker/key readbacks, both interruption recoveries, six exact absence proofs and zero retained credentials. Controlled roots do not qualify production namespace serialization. |
 | Shared CLI/MCP authority | Service, invocation and public SDK protocol tests cover fresh identity, binding changes, removed/pending refusal, override privacy, callback retirement and cleanup | Matched within tested injected/source cohort; actual canonical installed path remains gated. |
 | Preserve compatibility and unknown state | Explicit selectors, retained tombstones/journals, no auto migration/retry or shared-key revocation | Matched for implemented paths; bounded native listing and explicit migration remain separate work. |
-| Platform login and publication | No grant/token endpoint or delegated credential enabled | T07–T09 and public release remain open; SDK MIT approval does not imply CLI source licensing. |
+| Platform login and publication | No grant/token endpoint or delegated credential enabled | T07–T09 and public release remain open. Separate owner approval on October 21 licenses the public CLI under MIT; exact-source publication and registry gates remain. |
 
 The canonical acceptance attempt is preserved as a failure, not converted into
 a synthetic success. An existing AppData capability principal has applicable

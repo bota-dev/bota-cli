@@ -1,14 +1,16 @@
-# CLI preview candidate: publication blocked
+# CLI preview candidate: publication gated
 
 Date: October 19, 2026. Scope: T01 packaging qualification for
 `@bota.dev/cli@0.2.0-beta.0`, starting from functional source `25dca4e`.
 The owner-approved [implementation track](../../../internal-docs/plans/2026-10-18-developer-toolchain-implementation.md#52-remaining-execution-backlog)
 owns cross-repository/backend/docs delivery. Root owns source commit/push.
 
-**This is a locally prepared candidate, not an authorized or published release.**
-The CLI has no approved source-license identifier or `LICENSE` grant. None was
-inferred from another Bota repository. Dependency licenses and third-party
-notices do not grant rights to Bota source. Publication intentionally fails.
+**This is a prepared candidate, not a published release.** The owner explicitly
+approved MIT licensing for the public CLI on October 21, 2026. The package and
+root lock now declare MIT, and `LICENSE` contains the approved grant with the
+same Bota attribution as the API SDK. This resolves the source-license decision;
+exact-source publication approval, trusted publishing and registry acceptance
+remain independent gates. Third-party notices retain their own role.
 
 ## Read-only publication baseline
 
@@ -26,8 +28,8 @@ notices do not grant rights to Bota source. Publication intentionally fails.
 | Requirement | Evidence and status |
 | --- | --- |
 | Explicit preview/version boundary | Package version is `0.2.0-beta.0`; CLI `--version` reads its own installed manifest. The existing MCP compatibility identities remain `0.1.0`. README distinguishes historical npm latest from unpublished source preview. Matched. |
-| Restricted package contents | Five files: `package.json`, `README.md`, `dist/index.js`, `dist/release.json`, and `dist/THIRD_PARTY_NOTICES.txt`. `LICENSE` is allowed only when an approved grant is supplied. Source/tests/workflows/internal reviews are excluded. Matched in actual pack. |
-| Declared runtime support | Node minimum is `22.23.2`; Node 22/24 remain the tested cohorts. Seven runtime dependencies are exact already-locked versions. Zod 4.4.3 is now explicitly declared because source imports it directly. Existing lock dependency package entries are unchanged. Matched. |
+| Restricted package contents | Six files: `package.json`, `README.md`, `LICENSE`, `dist/index.js`, `dist/release.json`, and `dist/THIRD_PARTY_NOTICES.txt`. Source/tests/workflows/internal reviews are excluded. The installed license bytes and digest must match the approved source. |
+| Declared runtime support | Node minimum is `22.23.2`; Node 22/24 remain the tested cohorts. Eight runtime dependencies are exact qualified versions. The MIT metadata update changes no dependency package entry, version, integrity or resolution. |
 | Dependency/notices evidence | Build metadata detects bundled dependencies from the actual esbuild metafile and copies their license notices if needed. The current bundle has no third-party JavaScript; external dependencies ship their own notices. Both source and installed consumer graphs run the dependency-license gate. This is not source-license approval. Matched. |
 | Installed consumer | The actual tarball is installed into a temporary consumer through a generated lock followed by `npm ci --ignore-scripts`; lock bytes must remain unchanged. Installed version/help, hosted-mode help and one synthetic empty-scope identity read are checked, without login or a live API. Matched. |
 | Consumer isolation | Child environment uses an OS/runtime allowlist plus explicit temporary HOME/USERPROFILE, npm user/global config, cache and temporary directories. Proxy, provider, database/session, Node-option and inherited credential variables are excluded. Temporary cleanup verifies its resolved owned path. Matched. |
@@ -47,8 +49,11 @@ The three `tests/release-policy.test.mjs` cases cover missing license; source,
 tag, approval and provenance mismatches; and artifact/path/stale-receipt tampering.
 Their temporary fake license text tests policy only and grants nothing to Bota.
 Independent review passes those guards and the consumer isolation/dependency
-boundaries. The actual publication command exits nonzero because the source
-license is absent. No npm publish command is executed during qualification.
+boundaries. The original October 19 publication check failed because the source
+license was absent; that failure remains historical evidence. The October 21
+owner approval resolves that prerequisite, while source/tag/release approval
+checks continue to refuse unapproved publication. No npm publish command is
+executed during qualification.
 
 The owning delivery receipt records final test counts, type/build checks,
 packed readbacks, source identity and hosted CI. The unavailable dedicated
@@ -63,21 +68,42 @@ existing tarball/receipt/consumer JSON globs in both workflows. It does not
 upload the npm cache or broaden them to arbitrary hidden files. The successor
 requires its own exact-source CI and clean-source candidate receipt.
 
+## Approved source-license qualification
+
+The October 21 owner decision is implemented as the MIT grant in `LICENSE` and
+the `MIT` identifier in both package metadata and the root lock entry. The text
+and Bota attribution match the approved API SDK license. Structural comparison
+confirms that no dependency package entry, integrity, resolution or version
+changed. Third-party notices and the exact-source publication guard remain.
+
+Actual packed consumers pass all 18 installed checks on Node 22.23.2 and
+24.19.0 with npm 11.17.0. Both archives contain exactly six approved files,
+including `LICENSE`. The installed manifest and consumer lock retain `MIT`;
+the installed grant bytes and provenance digest equal the source. Strict types
+pass on both runtimes, all three publication/tamper cases pass on both, and
+the dependency gate passes 182 packages. These working-tree receipts correctly
+record `dirty: true` and require clean-source requalification after delivery.
+
+A read-only public registry check on October 21 still finds only `0.1.0`,
+`latest: 0.1.0`, and an unoccupied `0.2.0-beta.0`. It establishes no authenticated
+write authority or trusted-publisher configuration. No approval variable, tag,
+workflow dispatch or registry write is changed by licensing the source.
+
 ## Remaining gates
 
-1. An explicit owner decision must establish the source license and grant.
-   Supply approved metadata/text and requalify; do not merely remove the guard.
-2. Root must commit/push the candidate, then rebuild and re-smoke the exact
+1. Root must commit/push the licensed candidate, then rebuild and re-smoke the exact
    clean source. Local working-tree artifacts honestly report `dirty: true`
    and cannot be promoted as clean-source evidence.
-3. Configure/verify the npm trusted publisher for this repository/workflow.
+2. Configure/verify npm package ownership and the trusted publisher for this
+   repository/workflow.
    Only after review, repository variables must approve the exact source:
    `CLI_PREVIEW_PUBLICATION_APPROVAL=<version>@<commit>` and
    `CLI_SOURCE_LICENSE_APPROVAL=<license>@<commit>`. No values were set here.
-4. Future publication needs the matching tag and approved workflow execution,
+3. Recheck registry version occupancy and dist-tags, then use the matching tag
+   and approved workflow execution,
    registry tarball/integrity/provenance readback, normal public installation,
    unchanged `latest`, and its own release receipt. Those remain unverified.
-5. Backend identity/integration/hosted-tool availability, docs-site promotion,
+4. Backend identity/integration/hosted-tool availability, docs-site promotion,
    and authorized live-principal smoke retain separate deployment/release gates.
    Help/import and synthetic identity evidence do not qualify live MCP operations.
 

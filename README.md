@@ -7,8 +7,9 @@ Official CLI for the [Bota](https://bota.dev) developer platform. Manage support
 The current public npm `latest` is **0.1.0**, published May 25, 2026. It does not
 contain the source-preview workflows described below. The prepared candidate
 is **0.2.0-beta.0**, requires Node **22.23.2 or newer**, and is **not published**.
-Its source-license decision is unresolved, which blocks publication. Packaging
-and synthetic tests do not authorize a license grant or registry release.
+The CLI source is [MIT licensed](LICENSE), approved by the owner on October 21,
+2026. Registry publication still requires exact-source release approval and
+the verified publishing workflow; packaging and synthetic tests do not publish it.
 
 To install the historical public version:
 
@@ -354,13 +355,14 @@ the installed command's version/help, hosted-mode help, legacy identity read,
 profile enrollment/status and credential-free metadata list/removal against
 synthetic loopback fixtures. It uses temporary homes and npm configuration with
 inherited credentials removed. The root dependency lock remains unchanged.
-The package includes the executable, manifest, README, build/source metadata,
-and third-party notices; source tests, CI configuration and internal reviews
+The package includes the executable, manifest, README, MIT license, build/source
+metadata, and third-party notices; source tests, CI configuration and internal reviews
 are excluded. The candidate metadata records source dirtiness honestly.
 Transitive dependency ranges are not globally frozen for future consumers;
 the receipt records the exact graph used by this installed-consumer check.
 
-The publication guard requires an approved source license and `LICENSE`, a
+Packed consumers verify the manifest's MIT identifier, exact `LICENSE` bytes
+and provenance digest. The publication guard still requires a
 clean source commit matching `GITHUB_SHA`, a matching `v0.2.0-beta.N` tag and
 package version, and exact-source repository approval variables. It publishes
 the already-tested tarball with provenance. No tag, release, dispatch, registry
