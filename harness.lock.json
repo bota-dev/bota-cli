@@ -1,0 +1,51 @@
+{
+  "agents_sha256": "9e72dbbdfab2481057a503860fdb108a02ba515ea3ce0c993ea97d8177d059c8",
+  "files": [
+    {
+      "sha256": "ca194f3bfe62d02a585430774384aeae64826c4887f793ef59d99f71f6fba4f9",
+      "source": "harness.py",
+      "target": "scripts/bota-harness.py"
+    },
+    {
+      "sha256": "1c6f936c21de138f4ece104f949ece48e66574af8efb2fc3b461090cb2fd449e",
+      "source": "rules.md",
+      "target": ".bota-harness/common.md"
+    },
+    {
+      "sha256": "043d600f2b70b279a1d49b98a165c907c45396f7307c88aeb13ecff50147d015",
+      "source": "skills/bota-code-change/SKILL.md",
+      "target": ".agents/skills/bota-code-change/SKILL.md"
+    },
+    {
+      "sha256": "6791ae69015b74aa7c407f6471dc342133317060f96939984ab8ae1319c0b064",
+      "source": "skills/bota-code-change/agents/openai.yaml",
+      "target": ".agents/skills/bota-code-change/agents/openai.yaml"
+    },
+    {
+      "sha256": "6f3d1dbffe140551e15ab9e528047e00b95d9a84559f33cc1d886f35d44bedda",
+      "source": "skills/bota-review-change/SKILL.md",
+      "target": ".agents/skills/bota-review-change/SKILL.md"
+    },
+    {
+      "sha256": "612d7e940f97a67e06afb6f62e97b0c8d10ea9dadee18d33fde79f7b557a4b05",
+      "source": "skills/bota-review-change/agents/openai.yaml",
+      "target": ".agents/skills/bota-review-change/agents/openai.yaml"
+    },
+    {
+      "sha256": "b6c8e8cf3c5f0f10aaf664ea85bc838a989f721b348e5b58c24983802d957fc8",
+      "source": "workflows/bota-harness-update.yml",
+      "target": ".github/workflows/bota-harness-update.yml"
+    },
+    {
+      "sha256": "18e038ee8316463d24299c773977507b84e1bb56dc34c8bea6068d6c5f9f08bd",
+      "source": "workflows/bota-harness.yml",
+      "target": ".github/workflows/bota-harness.yml"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "commit": "daab331d5922e17dc83ec1d2599234459162ac0c",
+    "path": "engineering/bundle",
+    "repository": "bota-dev/bota-skills"
+  }
+}
