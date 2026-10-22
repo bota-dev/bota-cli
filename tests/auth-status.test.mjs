@@ -80,7 +80,7 @@ test('auth status missing credentials fails locally with structured or human dia
   for (const args of [[], ['--json']]) {
     const result = await status(t, api.url, args, { missing: true });
     assert.equal(result.code, 1); assert.equal(result.stdout, '');
-    if (args.length) assert.deepEqual(JSON.parse(result.stderr), { error: { code: 'not_authenticated', message: 'No credential is selected. Run: bota auth login, or supply BOTA_API_KEY.' } });
+    if (args.length) assert.deepEqual(JSON.parse(result.stderr), { error: { code: 'not_authenticated', message: 'No credential is selected. Supply BOTA_API_KEY, or select an enrolled API-key profile.' } });
     else assert.match(result.stderr, /No credential is selected/);
   }
   assert.equal(api.requests.length, 0);

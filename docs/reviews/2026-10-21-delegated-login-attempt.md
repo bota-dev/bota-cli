@@ -348,3 +348,26 @@ Independent scoped review found no remaining concrete issue.
 | Strict authenticated response boundary | Success/status/header/body bounds, escaped raw duplicate rejection and committed identity codec | Matched in owned HTTP fixtures. Live backend, certificate trust and ingress remain unqualified. |
 | Retiring authority and owned response cleanup | Parent retargeting/expiry, pre-header and stalled-body cancellation, deadline, captured native slots and fixed failures | Matched with cooperative actual native fetch/body work. No arbitrary-port universal-join claim. |
 | Shared login activation | No command/browser/native store or initial enrollment producer | Partial. Durable initial proof retention, native family coordination, configured consent and live acceptance remain open. |
+
+## October 22 retirement of browser API-key export
+
+No-argument `auth login` now fails locally with `platform_login_unavailable`
+and fixed environment/secure-profile guidance. It no longer opens a browser,
+binds a callback listener, receives a project key through a URL or writes that
+key to configuration. The unused dashboard override remains accepted for
+compatibility but cannot reactivate the flow. Help, README and missing-credential
+guidance describe the available API-key workflows.
+
+This deliberately retires the older browser-key compatibility behavior: it
+cannot satisfy the design's code-only URLs or separate developer-session
+requirements. Explicit legacy `auth login <key>` and logout retain their
+existing behavior; explicit environment and secure profiles are unchanged.
+Legacy key arguments still use plaintext config and command-line input and are
+not presented as secure enrollment.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| No browser export of project secrets | Actual CLI subprocesses fail without a callback, make zero fixture requests and preserve saved config bytes; fixed JSON/human diagnostics contain no credential/URL | Matched in source and controlled subprocess execution. Backend/Portal retirement has its own evidence. |
+| Preserve explicit API-key compatibility | Key-argument enrollment, logout, identity/profile and complete CLI regression suites | Matched for tested source. No owner credential or canonical store is accessed by the new retirement tests. |
+| Source/package qualification | Both Node 24.19.0 and 22.23.2: 652 total, 649 pass, three expected platform skips; strict types; installed candidate verification and 182-package license check | Matched locally. Exact-source hosted checks and public package availability remain separate. |
+| Secure delegated enrollment/shared auth | No native initial-attempt journal, abandoned-grant recovery, native family provider or configured browser consent is enabled | Partial overall. Retirement closes an unsafe old path; it does not complete Platform login. |

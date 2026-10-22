@@ -25,7 +25,7 @@ program
   .description('Bota developer CLI')
   .version(version)
   .option('--api-url <url>', 'Override API base URL')
-  .option('--dashboard-url <url>', 'Override dashboard/portal URL')
+  .option('--dashboard-url <url>', 'Reserved compatibility option; browser key export is retired')
   .option('--profile <name>', 'Explicit environment-only profile; verify its origin/project before cloud operations')
   .option('--secure-profile <name>', 'Explicit OS-stored project profile; verify current credentials for every action or MCP request')
   .option('--json', 'Output raw JSON');

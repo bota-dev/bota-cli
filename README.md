@@ -24,17 +24,15 @@ Any future preview publication uses `beta`; it must not move `latest`.
 ## Authentication
 
 ```bash
-# Browser login — opens the Bota dashboard to authorize
-bota auth login
-
-# Headless / CI — pass your key directly
-bota auth login sk_live_...
+# Inject BOTA_API_KEY through your shell or CI secret manager
+# On a supported host, enroll a key with hidden terminal input:
+bota auth secure-profiles add work --key-prompt
 
 # Resolve the selected project credential's identity
 bota auth status
 bota auth status --json
 
-# Remove saved credentials
+# Remove a legacy saved key (secure profiles have their own remove command)
 bota auth logout
 ```
 
@@ -43,6 +41,14 @@ bota auth logout
 Status output excludes key material, key hints, and API URLs. Status rendering escapes C0, DEL, C1, and direction/line controls in opaque identifiers and scope strings; JSON parsing preserves the exact stored values. `--json` writes success to stdout; failures use a fixed `error` object on stderr and exit nonzero. Invalid credentials (401), unsupported credential authority (403), organization quarantine (423), rate limiting (429), service failures, malformed responses, and connectivity failures are distinguished. A temporary service failure does not establish that a credential is invalid. The command never falls back to a business read or retries the check.
 
 Without `--profile`, the existing selection order remains: a saved configuration key takes precedence over `BOTA_API_KEY`. With no saved key, inject a restricted key through `BOTA_API_KEY`; direct `auth login <key>` retains its existing secret-key format check and plaintext storage behavior. Status does not rewrite that configuration or introduce delegated OAuth. A matching backend identity endpoint is required; source delivery, backend deployment, and CLI publication remain separate.
+
+The no-argument `bota auth login` browser flow is retired. It previously exported
+a project secret in a callback URL; it was not delegated Platform login. It now
+fails locally without opening a browser/listener or changing saved credentials.
+Platform account login for CLI/MCP remains unavailable pending secure enrollment
+and recovery qualification. `auth login <key>` is retained only for explicit
+legacy compatibility: it places the key in command history and plaintext config.
+Prefer environment injection or the secure profile commands below.
 
 ### Secure API-key profiles in the source preview
 
@@ -292,7 +298,7 @@ bota mcp --mode hosted
 claude mcp add bota-hosted -- bota mcp --mode hosted
 ```
 
-Run `bota auth login` separately first, supply `BOTA_API_KEY`, or explicitly select a profile. Startup is noninteractive. Without `--secure-profile`, hosted mode uses the selected API base URL's `/mcp` endpoint and captures the credential and API URL once; restart the process after changing credentials or environment. Secure mode uses the per-request behavior above. Unknown modes and invalid API URLs fail locally. Package publication and availability of a matching hosted deployment remain separate from this source preview.
+Supply `BOTA_API_KEY` or explicitly select an enrolled profile before startup. Startup is noninteractive. Without `--secure-profile`, hosted mode uses the selected API base URL's `/mcp` endpoint and captures the credential and API URL once; restart the process after changing credentials or environment. Secure mode uses the per-request behavior above. Unknown modes and invalid API URLs fail locally. Package publication and availability of a matching hosted deployment remain separate from this source preview.
 
 Without `--profile`, bridge startup makes no network request. An explicit
 environment profile first verifies developer identity before connecting stdio;
@@ -309,7 +315,7 @@ Each list or call uses a fresh official MCP client connection with one total 30-
 | Flag | Description |
 | --- | --- |
 | `--api-url <url>` | Override the API base URL |
-| `--dashboard-url <url>` | Override the portal URL (for browser login) |
+| `--dashboard-url <url>` | Reserved compatibility option; browser key export is retired |
 | `--json` | Output raw JSON |
 
 ```bash

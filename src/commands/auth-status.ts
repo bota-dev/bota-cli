@@ -2,7 +2,7 @@ import { BotaApiError, BotaClient, BotaResponseError, type ProjectIdentity } fro
 import { handleCommandFailure } from '../output.js';
 
 const messages = {
-  not_authenticated: 'No credential is selected. Run: bota auth login, or supply BOTA_API_KEY.',
+  not_authenticated: 'No credential is selected. Supply BOTA_API_KEY, or select an enrolled API-key profile.',
   invalid_credential: 'The API rejected this credential. It may be invalid, expired, or revoked.',
   permission_denied: 'This credential cannot read project developer identity. Use a project secret or restricted API key.',
   organization_access_quarantined: 'Organization access is quarantined. Check Bota Platform before continuing.',
