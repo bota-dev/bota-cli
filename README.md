@@ -26,7 +26,7 @@ Any future preview publication uses `beta`; it must not move `latest`.
 ```bash
 # Inject BOTA_API_KEY through your shell or CI secret manager
 # On a supported host, enroll a key with hidden terminal input:
-bota auth secure-profiles add work --key-prompt
+bota --api-url https://api.bota.dev auth secure-profiles add work --key-prompt
 
 # Resolve the selected project credential's identity
 bota auth status
