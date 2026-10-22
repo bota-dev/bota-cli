@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { types } from 'node:util';
 import type { NativeReference } from './native-profile-transaction.js';
+import { delegatedNativeSecretReference, delegatedNativeSecret, delegatedNativeCredentialNames,
+  type DelegatedNativeSecretReference, type DelegatedNativeSecretApi } from './delegated-native-contract.js';
 
 export type WindowsNativeErrorCode = 'windows_native_unsupported' | 'windows_native_environment'
   | 'windows_native_untrusted' | 'windows_native_unavailable' | 'windows_native_busy'
@@ -73,8 +75,15 @@ export interface WindowsKnownFolderBindings {
   free(address: bigint): void;
   view(address: bigint, length: number): ArrayBuffer;
 }
+export interface WindowsProfileDirectoryApi { profileDirectory(): string }
 export function bindWindowsKnownFolderApi(bindings: WindowsKnownFolderBindings): WindowsKnownFolderApi {
-  return Object.freeze({ localAppData(): string {
+  return Object.freeze({ localAppData: () => lookupKnownFolder(bindings, '8527b3f1ba6fcf4f9d557b8e7f157091') });
+}
+/** Closed Profile lookup, separate from the unchanged LocalAppData API-key format. */
+export function bindWindowsProfileDirectoryApi(bindings: WindowsKnownFolderBindings): WindowsProfileDirectoryApi {
+  return Object.freeze({ profileDirectory: () => lookupKnownFolder(bindings, '8f856c5e220e60479afeea3317b67173') });
+}
+function lookupKnownFolder(bindings: WindowsKnownFolderBindings, identifier: string): string {
     bindings.assertHealthy();
     const output = Buffer.alloc(8);
     let token: WindowsOwnedHandle | undefined;
@@ -86,9 +95,9 @@ export function bindWindowsKnownFolderApi(bindings: WindowsKnownFolderBindings):
       if (typeof token.value !== 'bigint' || token.value <= 0n || token.value >= 0xffffffffffffffffn) {
         bindings.poison(); fail('windows_native_unavailable');
       }
-      // FOLDERID_LocalAppData {F1B32785-6FBA-4FCF-9D55-7B8E7F157091}.
-      // GUID's first three integer fields use Windows little-endian layout.
-      const result = bindings.lookup(Buffer.from('8527b3f1ba6fcf4f9d557b8e7f157091', 'hex'), 0, token.value, output);
+      // Only the two closed callers above supply a GUID. Its first three
+      // integer fields use Windows little-endian layout.
+      const result = bindings.lookup(Buffer.from(identifier, 'hex'), 0, token.value, output);
       address = output.readBigUInt64LE();
       if (address > 0xffffffffffffeffen) { address = 0n; bindings.poison(); fail('windows_native_unavailable'); }
       if (typeof result !== 'number' || !Number.isInteger(result) || result < -0x80000000 || result > 0x7fffffff) {
@@ -119,7 +128,7 @@ export function bindWindowsKnownFolderApi(bindings: WindowsKnownFolderBindings):
       if (token) { try { bindings.closeToken(token); } catch { bindings.poison(); cleanupFailed = true; } }
       if (cleanupFailed) fail('windows_native_close_unknown');
     }
-  } });
+    return fail('windows_native_unavailable');
 }
 
 export type WindowsCredentialRead = Readonly<{ status: 'absent' } | { status: 'present'; key: string }>;
@@ -173,6 +182,37 @@ export interface WindowsCredentialBindings {
 /** Build the strict API over a trusted injected native port. This export is
  * for fault fixtures; it is not a runtime plugin or configurable store. */
 export function bindWindowsCredentialApi(bindings: WindowsCredentialBindings): WindowsCredentialApi {
+  return bindClosedWindowsCredentials(bindings, { reference: windowsCredentialReference,
+    secret: (_reference, value) => windowsCredentialKey(value), names: credentialNames });
+}
+/** Closed delegated references only: no credential target or namespace override. */
+export function bindWindowsDelegatedCredentialApi(bindings: WindowsCredentialBindings): DelegatedNativeSecretApi {
+  const api = bindClosedWindowsCredentials<DelegatedNativeSecretReference>(bindings, {
+    reference: delegatedNativeSecretReference, secret: delegatedNativeSecret, names: delegatedNativeCredentialNames });
+  return Object.freeze({ assertHealthy: () => api.assertHealthy(),
+    readCredential(reference: DelegatedNativeSecretReference) {
+      const result = api.readCredential(reference);
+      return result.status === 'absent' ? result : Object.freeze({ status: 'present' as const, secret: result.key });
+    },
+    writeCredential: (reference: DelegatedNativeSecretReference, secret: string) => api.writeCredential(reference, secret),
+    deleteCredential: (reference: DelegatedNativeSecretReference) => api.deleteCredential(reference),
+  });
+}
+interface ClosedCredentialApi<R> {
+  assertHealthy(): void;
+  readCredential(value: R): WindowsCredentialRead;
+  writeCredential(value: R, key: string): 'stored' | 'not_stored' | 'unknown';
+  deleteCredential(value: R): 'deleted' | 'absent' | 'not_deleted' | 'unknown';
+}
+function bindClosedWindowsCredentials<R>(bindings: WindowsCredentialBindings, family: {
+  reference(value: unknown): R;
+  secret(reference: R, value: unknown): string;
+  names(reference: R): { readonly target: string; readonly username: string };
+}): ClosedCredentialApi<R> {
+  const checkedSecret = (reference: R, value: unknown): string => {
+    try { return family.secret(reference, value); }
+    catch { return fail('windows_native_untrusted'); }
+  };
   const unknown = (): never => { bindings.poison(); return fail('windows_native_unavailable'); };
   const bool = (value: unknown): boolean => {
     if (typeof value !== 'number' || !Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff) return unknown();
@@ -197,9 +237,9 @@ export function bindWindowsCredentialApi(bindings: WindowsCredentialBindings): W
     }
     return true;
   };
-  const withCredential = <T>(reference: NativeReference, use: (address: bigint, names: ReturnType<typeof credentialNames>) => T): T | null => {
+  const withCredential = <T>(reference: R, use: (address: bigint, names: ReturnType<typeof credentialNames>) => T): T | null => {
     bindings.assertHealthy();
-    const names = credentialNames(reference), output = Buffer.alloc(8);
+    const names = family.names(reference), output = Buffer.alloc(8);
     let address = 0n;
     try {
       const found = bool(bindings.read(names.target, 1, 0, output));
@@ -241,18 +281,18 @@ export function bindWindowsCredentialApi(bindings: WindowsCredentialBindings): W
   };
   return Object.freeze({
     assertHealthy: () => bindings.assertHealthy(),
-    readCredential(value: NativeReference): WindowsCredentialRead {
-      const reference = windowsCredentialReference(value);
-      const key = withCredential(reference, decoded);
+    readCredential(value: R): WindowsCredentialRead {
+      const reference = family.reference(value);
+      const key = withCredential(reference, (address, names) => checkedSecret(reference, decoded(address, names)));
       return key === null ? Object.freeze({ status: 'absent' }) : Object.freeze({ status: 'present', key });
     },
-    writeCredential(value: NativeReference, key: string): 'stored' | 'not_stored' | 'unknown' {
-      const reference = windowsCredentialReference(value); windowsCredentialKey(key);
+    writeCredential(value: R, key: string): 'stored' | 'not_stored' | 'unknown' {
+      const reference = family.reference(value); checkedSecret(reference, key);
       // CredWriteW upserts. Never knowingly overwrite any prior entry, even
       // one whose fields/blob are malformed. The outer namespace lease covers
       // cooperating writers; arbitrary same-user/admin writes remain trusted.
       if (withCredential(reference, () => true) !== null) return 'not_stored';
-      const names = credentialNames(reference), target = Buffer.from(`${names.target}\0`, 'utf16le');
+      const names = family.names(reference), target = Buffer.from(`${names.target}\0`, 'utf16le');
       const username = Buffer.from(`${names.username}\0`, 'utf16le'), secret = Buffer.from(key, 'ascii');
       const header = Buffer.alloc(80);
       try {
@@ -269,12 +309,12 @@ export function bindWindowsCredentialApi(bindings: WindowsCredentialBindings): W
       } catch { bindings.poison(); return 'unknown'; }
       finally { secret.fill(0); header.fill(0); target.fill(0); username.fill(0); }
     },
-    deleteCredential(value: NativeReference): 'deleted' | 'absent' | 'not_deleted' | 'unknown' {
-      const reference = windowsCredentialReference(value);
+    deleteCredential(value: R): 'deleted' | 'absent' | 'not_deleted' | 'unknown' {
+      const reference = family.reference(value);
       // Validate every ownership marker and blob before deleting the exact
       // reference. A malformed prior entry is never silently adopted/removed.
       let present: boolean | null;
-      try { present = withCredential(reference, (address, names) => { decoded(address, names); return true; }); }
+      try { present = withCredential(reference, (address, names) => { checkedSecret(reference, decoded(address, names)); return true; }); }
       catch (error) {
         if (error instanceof WindowsNativeError && error.code === 'windows_native_untrusted') return 'not_deleted';
         throw error;
@@ -282,7 +322,7 @@ export function bindWindowsCredentialApi(bindings: WindowsCredentialBindings): W
       if (present === null) return 'absent';
       try {
         bindings.assertHealthy();
-        const deleted = bool(bindings.delete(credentialNames(reference).target, 1, 0));
+        const deleted = bool(bindings.delete(family.names(reference).target, 1, 0));
         const status = deleted ? 0 : bindings.lastError();
         return deleted ? 'deleted' : status === 1168 ? 'absent' : 'unknown';
       } catch { bindings.poison(); return 'unknown'; }
@@ -320,6 +360,8 @@ function samePath(a: string, b: string): boolean { return a.toLowerCase() === b.
 interface WindowsNativeApis {
   readonly lease: WindowsLeaseApi;
   readonly credentials: WindowsCredentialApi;
+  readonly delegatedCredentials: DelegatedNativeSecretApi;
+  readonly profileDirectory: WindowsProfileDirectoryApi;
   readonly snapshots: WindowsSnapshotFileApi;
   readonly knownFolders: WindowsKnownFolderApi;
 }
@@ -556,13 +598,15 @@ async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
       trust(handle, 'system-file'); localNtfs(expected);
     } finally { closeOwned(handle); }
   }
-  const credentials = bindWindowsCredentialApi({ assertHealthy: healthy,
+  const credentialBindings: WindowsCredentialBindings = { assertHealthy: healthy,
     poison() { processPoisoned = true; },
     read: credentialRead, write: credentialWrite, delete: credentialDelete, free: credentialFree,
     lastError, view: (address, length) => koffi.view(address, length),
     address: buffer => koffi.address(buffer),
-  });
-  const knownFolders = bindWindowsKnownFolderApi({ assertHealthy: healthy,
+  };
+  const credentials = bindWindowsCredentialApi(credentialBindings);
+  const delegatedCredentials = bindWindowsDelegatedCredentialApi(credentialBindings);
+  const knownFolderBindings: WindowsKnownFolderBindings = { assertHealthy: healthy,
     poison() { processPoisoned = true; },
     openCurrentToken() {
       healthy(); return boundary(() => {
@@ -576,7 +620,9 @@ async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
     },
     closeToken: closeOwned, lookup: knownFolder, free: taskFree,
     view: (address, length) => koffi.view(address, length),
-  });
+  };
+  const knownFolders = bindWindowsKnownFolderApi(knownFolderBindings);
+  const profileDirectory = bindWindowsProfileDirectoryApi(knownFolderBindings);
   const snapshots: WindowsSnapshotFileApi = Object.freeze({ ...api,
     openDataFile(filename: string, create: boolean): WindowsOwnedHandle | null {
       healthy();
@@ -625,7 +671,7 @@ async function loadWindowsNativeApis(): Promise<WindowsNativeApis> {
       });
     },
   });
-  return Object.freeze({ lease: Object.freeze(api), credentials, snapshots, knownFolders });
+  return Object.freeze({ lease: Object.freeze(api), credentials, delegatedCredentials, snapshots, knownFolders, profileDirectory });
 }
 
 let bootstrap: Promise<WindowsNativeApis> | undefined;
@@ -643,6 +689,8 @@ async function windowsNativeApis(): Promise<WindowsNativeApis> {
 }
 export async function createWindowsLeaseApi(): Promise<WindowsLeaseApi> { return (await windowsNativeApis()).lease; }
 export async function createWindowsCredentialApi(): Promise<WindowsCredentialApi> { return (await windowsNativeApis()).credentials; }
+export async function createWindowsDelegatedCredentialApi(): Promise<DelegatedNativeSecretApi> { return (await windowsNativeApis()).delegatedCredentials; }
+export async function createWindowsProfileDirectoryApi(): Promise<WindowsProfileDirectoryApi> { return (await windowsNativeApis()).profileDirectory; }
 export async function createWindowsSnapshotFileApi(): Promise<WindowsSnapshotFileApi> { return (await windowsNativeApis()).snapshots; }
 export async function createWindowsKnownFolderApi(): Promise<WindowsKnownFolderApi> { return (await windowsNativeApis()).knownFolders; }
 

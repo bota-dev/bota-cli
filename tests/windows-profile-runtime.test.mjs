@@ -3,7 +3,7 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { bindWindowsKnownFolderApi, createWindowsKnownFolderApi, WindowsNativeError } from '../src/windows-native-api.ts';
+import { bindWindowsKnownFolderApi, bindWindowsProfileDirectoryApi, createWindowsKnownFolderApi, WindowsNativeError } from '../src/windows-native-api.ts';
 import { bindWindowsProfileRuntime, getWindowsProfileRoot } from '../src/windows-profile-runtime.ts';
 import { qualifyWindowsSnapshotRuntime } from '../src/windows-native-snapshots.ts';
 
@@ -12,7 +12,7 @@ function context() {
   const controller = new AbortController(); let expired = false;
   return { signal: controller.signal, controller, expire() { expired = true; }, budget: { assertActive() { if (expired) throw new Error('private-budget-canary'); } } };
 }
-function knownFolder(value = 'C:\\Users\\Synthetic\\AppData\\Local') {
+function knownFolder(value = 'C:\\Users\\Synthetic\\AppData\\Local', profile = false) {
   let memory = Buffer.from(`${value}\0`, 'utf16le'); const base = 0x10000n;
   const h = { memory, calls: [], result: 0, nullOutput: false, poisoned: false,
     freeFault: false, lookupFault: false, viewFault: false, tokenFault: false, closeTokenFault: false };
@@ -22,7 +22,7 @@ function knownFolder(value = 'C:\\Users\\Synthetic\\AppData\\Local') {
     openCurrentToken() { h.calls.push('token'); if (h.tokenFault) throw new Error('private-native-canary'); return { value: 17n }; },
     closeToken(token) { assert.equal(token.value, 17n); token.value = null; h.calls.push('close-token'); if (h.closeTokenFault) throw new Error('private-native-canary'); },
     lookup(guid, flags, token, output) {
-      assert.equal(guid.toString('hex'), '8527b3f1ba6fcf4f9d557b8e7f157091'); assert.equal(flags, 0); assert.equal(token, 17n);
+      assert.equal(guid.toString('hex'), profile ? '8f856c5e220e60479afeea3317b67173' : '8527b3f1ba6fcf4f9d557b8e7f157091'); assert.equal(flags, 0); assert.equal(token, 17n);
       h.calls.push('lookup'); if (!h.nullOutput) output.writeBigUInt64LE(base);
       if (h.lookupFault) throw new Error('private-native-canary'); return h.result;
     },
@@ -33,7 +33,7 @@ function knownFolder(value = 'C:\\Users\\Synthetic\\AppData\\Local') {
     },
     free(address) { assert.equal(address, base); h.calls.push('free'); if (h.freeFault) throw new Error('private-native-canary'); },
   };
-  h.api = bindWindowsKnownFolderApi(bindings); return h;
+  h.api = profile ? bindWindowsProfileDirectoryApi(bindings) : bindWindowsKnownFolderApi(bindings); return h;
 }
 test('KnownFolder uses exact current-user GUID/default flags, copies bounded UTF16 and frees once', () => {
   const h = knownFolder('D:\\Users\\账户\\AppData\\Local');
@@ -186,4 +186,14 @@ test('actual Windows KnownFolder lookup is read-only and independent of profile 
   assert.equal(child.status, 0); assert.equal(child.stderr, '');
   assert.ok(JSON.parse(child.stdout) === actual, 'OS KnownFolder selection must not follow process profile overrides');
   // No lease/runtime factory is constructed; the canonical Bota leaf is untouched.
+});
+
+test('delegated Profile folder uses its own fixed GUID and explicit token, with joined cleanup', () => {
+  const h = knownFolder('D:\\Users\\Synthetic', true);
+  assert.equal(h.api.profileDirectory(), 'D:\\Users\\Synthetic');
+  assert.deepEqual(h.calls, ['token', 'lookup', 'free', 'close-token']);
+  assert.equal(h.api.localAppData, undefined);
+  const failed = knownFolder('D:\\Users\\Synthetic', true); failed.result = -2147467259;
+  assert.throws(() => failed.api.profileDirectory(), errorCode('windows_native_unavailable'));
+  assert.deepEqual(failed.calls, ['token', 'lookup', 'free', 'close-token']);
 });

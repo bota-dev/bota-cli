@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bindWindowsCredentialApi, WindowsNativeError, windowsCredentialReference } from '../src/windows-native-api.ts';
+import { bindWindowsCredentialApi, bindWindowsDelegatedCredentialApi, WindowsNativeError, windowsCredentialReference } from '../src/windows-native-api.ts';
 import { WindowsNativeStore } from '../src/windows-native-store.ts';
 import { WINDOWS_NATIVE_STORE_ID } from '../src/windows-native-lease.ts';
+import { delegatedNativeCredentialNames, encodeDelegatedNativeProof } from '../src/delegated-native-contract.ts';
 import { NativeProfileTransactions } from '../src/native-profile-transaction.ts';
 
 const reference = Object.freeze({ profile_id: '11111111-1111-4111-8111-111111111111', credential_ref: '22222222-2222-4222-8222-222222222222' });
@@ -15,7 +16,8 @@ function context() {
   return { controller, expire() { expired = true; }, signal: controller.signal,
     budget: { assertActive() { if (expired) throw new Error('private budget detail'); } } };
 }
-function fixture() {
+function fixture(delegatedReference) {
+  const names = delegatedReference ? delegatedNativeCredentialNames(delegatedReference) : { target, username };
   let address = 0x1000n;
   const memory = new Map(), calls = [], retained = [];
   const h = { memory, calls, retained, poison: false, readError: 1168, writeResult: 1, deleteResult: 1,
@@ -23,9 +25,9 @@ function fixture() {
   const allocate = value => { const at = address; address += 0x10000n; memory.set(at, Buffer.from(value)); return at; };
   h.credentialAt = (key = 'synthetic-api-key', mutate = () => {}) => {
     const header = Buffer.alloc(80), secret = Buffer.from(key);
-    header.writeUInt32LE(1, 4); header.writeBigUInt64LE(allocate(Buffer.from(`${target}\0`, 'utf16le')), 8);
+    header.writeUInt32LE(1, 4); header.writeBigUInt64LE(allocate(Buffer.from(`${names.target}\0`, 'utf16le')), 8);
     header.writeUInt32LE(secret.length, 32); header.writeBigUInt64LE(allocate(secret), 40);
-    header.writeUInt32LE(2, 48); header.writeBigUInt64LE(allocate(Buffer.from(`${username}\0`, 'utf16le')), 72);
+    header.writeUInt32LE(2, 48); header.writeBigUInt64LE(allocate(Buffer.from(`${names.username}\0`, 'utf16le')), 72);
     mutate(header, allocate); h.credential = allocate(header); return h.credential;
   };
   h.bindings = {
@@ -63,7 +65,7 @@ function fixture() {
       const at = address; address += 0x10000n; memory.set(at, value); retained.push(value); return at;
     },
   };
-  h.api = bindWindowsCredentialApi(h.bindings); return h;
+  h.api = delegatedReference ? bindWindowsDelegatedCredentialApi(h.bindings) : bindWindowsCredentialApi(h.bindings); return h;
 }
 function lease(contextValue, options = {}) {
   let admitted = true;
@@ -313,3 +315,45 @@ for (const committed of [false, true]) {
     assert.equal(h.calls.some(row => row[0] === 'write' || row[0] === 'delete'), false);
   });
 }
+
+const delegatedRef = Object.freeze({ kind: 'family-refresh', ownerId: reference.profile_id,
+  credentialId: reference.credential_ref, localGeneration: 7 });
+const delegatedRefresh = `bota_dr1_${Buffer.alloc(32, 3).toString('base64url')}`;
+test('delegated WinCred uses closed kind/generation markers and exact refresh encoding', () => {
+  const h = fixture(delegatedRef); h.credentialAt(delegatedRefresh);
+  assert.deepEqual(h.api.readCredential(delegatedRef), { status: 'present', secret: delegatedRefresh });
+  assert.equal(h.api.deleteCredential(delegatedRef), 'deleted');
+  const names = delegatedNativeCredentialNames(delegatedRef);
+  assert.ok(names.target.startsWith('Bota/DeveloperToolchain/delegated/v1/family-refresh/'));
+  assert.ok(names.target.endsWith('/7'));
+  assert.ok(h.calls.filter(row => row[0] === 'read' || row[0] === 'delete').every(row => row[1] === names.target));
+});
+test('delegated native read/delete preserve malformed payloads and foreign ownership markers', () => {
+  for (const [payload, mutate] of [['api-key-looking-secret', () => {}], [delegatedRefresh, malformed.wrongMarker],
+    [delegatedRefresh, malformed.wrongTarget], [`bota_dr1_${'A'.repeat(42)}B`, () => {}]]) {
+    const h = fixture(delegatedRef); h.credentialAt(payload, mutate);
+    assert.throws(() => h.api.readCredential(delegatedRef), errorCode('windows_native_untrusted'));
+    assert.equal(h.api.deleteCredential(delegatedRef), 'not_deleted');
+    assert.equal(h.calls.some(row => row[0] === 'delete'), false);
+    assert.equal(h.poison, false);
+  }
+});
+test('delegated attempt proof and refresh are distinct closed credential kinds', () => {
+  const proofRef = { kind: 'attempt-proof', ownerId: reference.profile_id, credentialId: reference.credential_ref };
+  const proof = encodeDelegatedNativeProof({ recoveryVerifier: Buffer.alloc(32, 1).toString('base64url'),
+    pkceVerifier: Buffer.alloc(32, 2).toString('base64url') });
+  const h = fixture(proofRef); assert.equal(h.api.writeCredential(proofRef, proof), 'stored');
+  assert.equal(h.writtenKey, proof); assert.equal(h.retained.every(buffer => buffer.every(byte => byte === 0)), true);
+  const wrong = fixture(delegatedRef);
+  assert.throws(() => wrong.api.writeCredential(delegatedRef, proof), errorCode('windows_native_untrusted'));
+  assert.equal(wrong.calls.length, 0);
+});
+test('delegated API cannot use API-key references or arbitrary targets, and never overwrites a collision', () => {
+  const h = fixture(delegatedRef);
+  for (const value of [reference, { ...delegatedRef, target: 'foreign' }, { ...delegatedRef, localGeneration: -1 }])
+    assert.throws(() => h.api.readCredential(value));
+  assert.equal(h.calls.length, 0);
+  h.credentialAt('foreign', malformed.wrongMarker);
+  assert.equal(h.api.writeCredential(delegatedRef, delegatedRefresh), 'not_stored');
+  assert.equal(h.calls.some(row => row[0] === 'write'), false);
+});

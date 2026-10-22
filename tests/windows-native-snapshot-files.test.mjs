@@ -3,7 +3,8 @@ import test from 'node:test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WindowsNativeSnapshotGuard, createWindowsNativeSnapshotGuard } from '../src/windows-native-snapshot-files.ts';
+import { WindowsNativeSnapshotGuard, createWindowsNativeSnapshotGuard, bindWindowsDelegatedSnapshotGuardForTrustedPorts } from '../src/windows-native-snapshot-files.ts';
+import { DELEGATED_NATIVE_DATABASE, DELEGATED_NATIVE_JOURNAL, DELEGATED_NATIVE_APPLICATION_ID } from '../src/delegated-native-contract.ts';
 import { WindowsNativeError } from '../src/windows-native-api.ts';
 import { openWindowsNativeLease, WINDOWS_NATIVE_STORE_ID } from '../src/windows-native-lease.ts';
 import {
@@ -25,10 +26,12 @@ function databaseBytes() {
   bytes.writeUInt32BE(1, 60); bytes.writeUInt32BE(WINDOWS_SNAPSHOT_APPLICATION_ID, 68);
   return bytes;
 }
-function harness(existing = false, metadata = false) {
+function harness(existing = false, metadata = false, delegated = false) {
+  const selectedDatabase = delegated ? DELEGATED_NATIVE_DATABASE : DATABASE;
+  const selectedJournal = delegated ? DELEGATED_NATIVE_JOURNAL : JOURNAL;
   const ctx = context(), binding = Object.freeze(metadata
     ? { metadataOnly: true, storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: root }
-    : { name: 'work', storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: root });
+    : { name: delegated ? 'a'.repeat(64) : 'work', storeId: WINDOWS_NATIVE_STORE_ID, rootDirectory: root });
   const files = new Map(), handles = new Map(), calls = [];
   let sequence = 0;
   const h = { ctx, binding, files, handles, calls, live: true, fault: undefined, closed: [], accessCount: 0 };
@@ -38,7 +41,7 @@ function harness(existing = false, metadata = false) {
   };
   h.entry = entry;
   entry(storeLease); if (!metadata) entry(profileLease(binding.name));
-  if (existing) { entry(DATABASE, databaseBytes()); entry(JOURNAL, Buffer.alloc(512)); }
+  if (existing) { const bytes = databaseBytes(); if (delegated) bytes.writeUInt32BE(DELEGATED_NATIVE_APPLICATION_ID, 68); entry(selectedDatabase, bytes); entry(selectedJournal, Buffer.alloc(512)); }
   h.lease = { assertCurrentAccess(value) {
     h.accessCount++;
     if (!h.live || value !== ctx || metadata) throw new WindowsNativeError('windows_native_untrusted');
@@ -94,7 +97,7 @@ function harness(existing = false, metadata = false) {
     },
   };
   h.inventory = () => { calls.push(['inventory']); return h.inventoryOverride ?? [...files.keys()]; };
-  h.guard = new WindowsNativeSnapshotGuard(h.lease, h.api, h.inventory);
+  h.guard = delegated ? bindWindowsDelegatedSnapshotGuardForTrustedPorts(h.lease, h.api, h.inventory) : new WindowsNativeSnapshotGuard(h.lease, h.api, h.inventory);
   return h;
 }
 
@@ -438,3 +441,24 @@ test('actual Windows super-journal footer refuses before SQLite and retains both
     });
   } finally { lease?.close(); await cleanup(directory); }
 });
+
+test('delegated guard uses separate fixed filenames/application ID and hashed ticket leases', () => {
+  const h = harness(true, false, true), files = h.guard.open(h.binding, h.ctx);
+  assert.equal(files.fresh, false); files.validate(); files.close();
+  assert.ok(h.calls.filter(row => row[0] === 'open').every(row => !row[1].startsWith('native-profiles-')));
+  assert.equal(h.handles.size, h.closed.length);
+});
+for (const fault of ['api-key-pair', 'api-key-header', 'plain-name-lease', 'unknown-file', 'super-journal']) {
+  test(`delegated guard refuses ${fault} without repairing retained state`, () => {
+    const h = harness(true, false, true);
+    if (fault === 'api-key-pair') { h.entry(DATABASE, databaseBytes()); h.entry(JOURNAL); }
+    if (fault === 'api-key-header') h.files.get(DELEGATED_NATIVE_DATABASE).bytes.writeUInt32BE(WINDOWS_SNAPSHOT_APPLICATION_ID, 68);
+    if (fault === 'plain-name-lease') h.entry(profileLease('work'));
+    if (fault === 'unknown-file') h.entry('retained-unknown');
+    if (fault === 'super-journal') journalMagic.copy(h.files.get(DELEGATED_NATIVE_JOURNAL).bytes, 504);
+    const before = [...h.files].map(([name, value]) => [name, Buffer.from(value.bytes)]);
+    assert.throws(() => h.guard.open(h.binding, h.ctx), errorCode('windows_native_untrusted'));
+    assert.deepEqual([...h.files].map(([name, value]) => [name, value.bytes]), before);
+    assert.equal(h.handles.size, h.closed.length);
+  });
+}

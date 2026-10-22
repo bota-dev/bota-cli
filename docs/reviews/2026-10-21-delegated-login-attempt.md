@@ -498,3 +498,54 @@ wrapper that still admitted only the legacy consent DTO and rejected the new
 optional authorization-request correlation ID. This CLI qualification does not
 resolve or establish that server composition; its narrow server correction and
 fresh actual HTTP/PostgreSQL protocol qualification have their own evidence.
+
+
+## October 22 native delegated format primitives
+
+Design 6.2 now defines one new delegated-only location:
+OS `FOLDERID_Profile` with an explicit current process token plus the fixed
+`BotaDeveloperToolchainDelegated` leaf. This is a new format's canonical root,
+not a runtime fallback or migration from LocalAppData. Existing API-key roots,
+ancestor checks and permissions remain unchanged. AppData's applicable Codex
+sandbox capability with full control still causes the expected API-key refusal.
+
+The closed delegated Credential Manager API derives only exact kind/local UUID/
+generation targets and markers. It shares the existing fixed verified Windows
+bindings and create-only/no-enumeration implementation. Reads/deletes reject
+malformed delegated payloads or foreign markers without adopting/removing the
+entry; uncertain mutations suspend use. A separate fixed SQLite guard requires
+`delegated-v1.sqlite3`, its journal and application ID `0x42544431`, with canonical
+hashed ticket leases. API-key guard behavior remains unchanged. No arbitrary
+root, target, DLL, filename or schema policy is exposed by production factories.
+
+The four focused suites pass **154 of 155 tests on Node 24.19.0 and 22.23.2**, with
+one expected non-Windows skip on this Windows host. The new root guard rejects
+proxy/getter contexts and reads genuine cancellation through the native signal
+accessor. Its capability/budget remains unchanged across OS lookup. Review also
+checked malformed payload preservation, closed namespace separation, GUID byte
+layout, exact headers and conservative unknown/super-journal admission.
+
+Genuine native leaf admission passes on both pinned runtimes: complete ancestor
+checks, exact final path/local NTFS, protected three-ACE leaf DACL, and joined
+handle close. The first lookup found the leaf absent; only that new private leaf
+was created. AppData SDDL is identical before/after, and the second runtime also
+preserves the existing leaf SDDL. These runs read/write zero credentials and
+open zero SQLite snapshots. Earlier read-only lookup alone did not prove this
+admission. This checkpoint establishes canonical leaf trust, not durable native
+attempt/family storage, restart recovery, installed commands or live login.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| Preserve host sandbox permissions | Genuine before/after AppData DACL comparison, unchanged trust algorithm | Matched within this Windows cohort |
+| New canonical location without fallback | Closed Profile GUID/current token/fixed leaf; genuine two-pin lease open/close | Leaf trust matched; no credential persistence claim |
+| Separate closed delegated formats | Marker/payload/collision and SQLite header/inventory preservation regressions | Source primitives matched; native coordinator qualification pending |
+| Complete Platform login | Live dev authorization/token/discovery return 404 at deployed source 069e4919 | Unverified; configuration/ingress and server mounts remain gates |
+
+
+The first broad development run retains 736 total / 732 pass / three expected
+skips / one cancellation: hosted discovery exceeded its unchanged 15-second
+case deadline while other source work ran. No assertion failed. Its isolated
+12-case file then passes, including the real 30-second total-deadline check.
+This does not retroactively pass the cancelled broad run. The foundation is
+qualified by the focused primitive suites and strict module types; final combined
+CLI/native/provider source, package and broader qualification remain separate.

@@ -12,6 +12,24 @@ import {
   type WindowsSnapshotBinding, type WindowsMetadataSnapshotBinding, type WindowsSnapshotFiles, type WindowsSnapshotGuard,
 } from './windows-snapshot-contract.js';
 
+import {
+  DELEGATED_NATIVE_DATABASE, DELEGATED_NATIVE_JOURNAL, DELEGATED_NATIVE_APPLICATION_ID,
+  DELEGATED_NATIVE_VERSION, DELEGATED_NATIVE_PAGE_SIZE, DELEGATED_NATIVE_MAX_DATABASE_BYTES,
+  DELEGATED_NATIVE_MAX_JOURNAL_BYTES, DELEGATED_NATIVE_MAX_RECORDS,
+} from './delegated-native-contract.js';
+/** Closed source cohorts; no caller-selected filename/schema/root policy. */
+const API_KEY_COHORT = Object.freeze({ database: WINDOWS_SNAPSHOT_DATABASE, journal: WINDOWS_SNAPSHOT_JOURNAL,
+  applicationId: WINDOWS_SNAPSHOT_APPLICATION_ID, version: WINDOWS_SNAPSHOT_VERSION,
+  pageSize: WINDOWS_SNAPSHOT_PAGE_SIZE, maxDatabaseBytes: WINDOWS_SNAPSHOT_MAX_DATABASE_BYTES,
+  maxJournalBytes: WINDOWS_SNAPSHOT_MAX_JOURNAL_BYTES, maxProfiles: WINDOWS_SNAPSHOT_MAX_PROFILES,
+  delegated: false });
+const DELEGATED_COHORT = Object.freeze({ database: DELEGATED_NATIVE_DATABASE, journal: DELEGATED_NATIVE_JOURNAL,
+  applicationId: DELEGATED_NATIVE_APPLICATION_ID, version: DELEGATED_NATIVE_VERSION,
+  pageSize: DELEGATED_NATIVE_PAGE_SIZE, maxDatabaseBytes: DELEGATED_NATIVE_MAX_DATABASE_BYTES,
+  maxJournalBytes: DELEGATED_NATIVE_MAX_JOURNAL_BYTES, maxProfiles: DELEGATED_NATIVE_MAX_RECORDS,
+  delegated: true });
+type SnapshotCohort = typeof API_KEY_COHORT | typeof DELEGATED_COHORT;
+
 type LeaseAuthority = Pick<WindowsNativeLease, 'assertCurrentAccess' | 'assertCurrentMetadataAccess'>;
 type SnapshotAccess = WindowsSnapshotBinding | WindowsMetadataSnapshotBinding;
 type Inventory = (directory: string) => readonly string[];
@@ -19,14 +37,14 @@ const STORE_LEASE = 'store-windows-credential-manager.lease';
 const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'ascii');
 const JOURNAL_MAGIC = Buffer.from('d9d505f920a163d7', 'hex');
 
-function directoryInventory(directory: string): readonly string[] {
+function directoryInventory(directory: string, maximum: number): readonly string[] {
   const opened = opendirSync(directory), names: string[] = [];
   try {
     for (;;) {
       const item = opened.readSync();
       if (!item) return names;
       names.push(item.name);
-      if (names.length > WINDOWS_SNAPSHOT_MAX_PROFILES + 3) refuse();
+      if (names.length > maximum + 3) refuse();
     }
   } finally {
     try { opened.closeSync(); }
@@ -42,31 +60,31 @@ function safeFailure(error: unknown): never {
 function selectedLease(binding: WindowsSnapshotBinding): string {
   return `profile-${Buffer.from(binding.name, 'ascii').toString('hex')}.lease`;
 }
-function knownLease(filename: string): boolean {
+function knownLease(filename: string, cohort: SnapshotCohort): boolean {
   if (filename === STORE_LEASE) return true;
   const match = /^profile-((?:[0-9a-f]{2}){1,64})\.lease$/.exec(filename);
   if (!match) return false;
   const name = Buffer.from(match[1]!, 'hex').toString('ascii');
-  return /^[a-z0-9-]{1,64}$/.test(name) && Buffer.from(name, 'ascii').toString('hex') === match[1];
+  return (cohort.delegated ? /^[0-9a-f]{64}$/.test(name) : /^[a-z0-9-]{1,64}$/.test(name)) && Buffer.from(name, 'ascii').toString('hex') === match[1];
 }
-function headerChecked(value: Uint8Array): Uint8Array {
+function headerChecked(value: Uint8Array, cohort: SnapshotCohort): Uint8Array {
   if (!(value instanceof Uint8Array) || value.byteLength !== 100) refuse();
   const bytes = Buffer.from(value);
   if (!bytes.subarray(0, 16).equals(SQLITE_MAGIC)
-    || bytes.readUInt16BE(16) !== WINDOWS_SNAPSHOT_PAGE_SIZE || bytes[18] !== 1 || bytes[19] !== 1
-    || bytes.readUInt32BE(60) !== WINDOWS_SNAPSHOT_VERSION
-    || bytes.readUInt32BE(68) !== WINDOWS_SNAPSHOT_APPLICATION_ID) refuse();
+    || bytes.readUInt16BE(16) !== cohort.pageSize || bytes[18] !== 1 || bytes[19] !== 1
+    || bytes.readUInt32BE(60) !== cohort.version
+    || bytes.readUInt32BE(68) !== cohort.applicationId) refuse();
   return new Uint8Array(bytes);
 }
 
 /** The injected constructor is a trusted fixture boundary. Production callers
  * use createWindowsNativeSnapshotGuard with the genuine lease and fixed native
  * API. Inventory reads only the live capability's pinned private root. */
-export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
+class ClosedWindowsSnapshotGuard implements WindowsSnapshotGuard {
   #poisoned = false;
   #opened = false;
   constructor(private readonly lease: LeaseAuthority, private readonly api: WindowsSnapshotFileApi,
-    private readonly inventory: Inventory = directoryInventory) {}
+    private readonly cohort: SnapshotCohort, private readonly inventory: Inventory = directory => directoryInventory(directory, cohort.maxProfiles)) {}
 
   assertCurrentAccess(context: NativeOperationContext): WindowsSnapshotBinding {
     if (this.#poisoned) throw new WindowsNativeError('windows_native_poisoned');
@@ -97,15 +115,15 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
       if (error instanceof WindowsNativeError && error.code === 'windows_native_close_unknown') this.#poisoned = true;
       throw error;
     }
-    if (!Array.isArray(names) || names.length > WINDOWS_SNAPSHOT_MAX_PROFILES + 3
+    if (!Array.isArray(names) || names.length > this.cohort.maxProfiles + 3
       || new Set(names).size !== names.length) refuse();
     let profiles = 0;
     for (const filename of names) {
       this.binding(binding, context);
       if (typeof filename !== 'string') refuse();
-      if (filename === WINDOWS_SNAPSHOT_DATABASE || filename === WINDOWS_SNAPSHOT_JOURNAL) continue;
-      if (!knownLease(filename)) refuse();
-      if (filename !== STORE_LEASE && ++profiles > WINDOWS_SNAPSHOT_MAX_PROFILES) refuse();
+      if (filename === this.cohort.database || filename === this.cohort.journal) continue;
+      if (!knownLease(filename, this.cohort)) refuse();
+      if (filename !== STORE_LEASE && ++profiles > this.cohort.maxProfiles) refuse();
       // Only handles held by this exact ticket may be skipped. A metadata
       // ticket holds the namespace alone, so every profile lease is admitted.
       if (filename === STORE_LEASE || !('metadataOnly' in binding) && filename === selectedLease(binding)) continue;
@@ -141,12 +159,12 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
 
   private journalChecked(handle: WindowsOwnedHandle, binding: SnapshotAccess,
     context: NativeOperationContext): { readonly identity: string; readonly size: bigint } {
-    const before = this.fileChecked(handle, WINDOWS_SNAPSHOT_JOURNAL, binding, context,
-      BigInt(WINDOWS_SNAPSHOT_MAX_JOURNAL_BYTES));
+    const before = this.fileChecked(handle, this.cohort.journal, binding, context,
+      BigInt(this.cohort.maxJournalBytes));
     const length = Number(before.size < 16n ? before.size : 16n);
     const tail = length === 0 ? new Uint8Array(0) : this.api.readTail(handle, length); this.binding(binding, context);
-    const after = this.fileChecked(handle, WINDOWS_SNAPSHOT_JOURNAL, binding, context,
-      BigInt(WINDOWS_SNAPSHOT_MAX_JOURNAL_BYTES));
+    const after = this.fileChecked(handle, this.cohort.journal, binding, context,
+      BigInt(this.cohort.maxJournalBytes));
     if (!(tail instanceof Uint8Array) || tail.byteLength !== length
       || before.identity !== after.identity || before.size !== after.size) refuse();
     // Both pinned SQLite readers require this EOF magic before interpreting a
@@ -177,10 +195,10 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
     try {
       this.inventoryChecked(binding, context);
       const filename = (name: string) => path.win32.join(binding.rootDirectory, name);
-      let database = this.api.openDataFile(filename(WINDOWS_SNAPSHOT_DATABASE), false);
+      let database = this.api.openDataFile(filename(this.cohort.database), false);
       if (database) handles.push(database);
       this.binding(binding, context);
-      let journal = this.api.openDataFile(filename(WINDOWS_SNAPSHOT_JOURNAL), false);
+      let journal = this.api.openDataFile(filename(this.cohort.journal), false);
       if (journal) handles.push(journal);
       this.binding(binding, context);
       if ((database === null) !== (journal === null)) refuse();
@@ -190,26 +208,26 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
         return null;
       }
       if (fresh) {
-        database = this.api.openDataFile(filename(WINDOWS_SNAPSHOT_DATABASE), true);
+        database = this.api.openDataFile(filename(this.cohort.database), true);
         if (!database) refuse();
         handles.push(database); this.binding(binding, context);
-        journal = this.api.openDataFile(filename(WINDOWS_SNAPSHOT_JOURNAL), true);
+        journal = this.api.openDataFile(filename(this.cohort.journal), true);
         if (!journal) refuse();
         handles.push(journal); this.binding(binding, context);
       }
       if (!database || !journal) refuse();
       const databaseHandle = database, journalHandle = journal;
-      const databaseFacts = this.fileChecked(databaseHandle, WINDOWS_SNAPSHOT_DATABASE, binding, context,
-        BigInt(WINDOWS_SNAPSHOT_MAX_DATABASE_BYTES));
-      const journalFacts = this.fileChecked(journalHandle, WINDOWS_SNAPSHOT_JOURNAL, binding, context,
-        BigInt(WINDOWS_SNAPSHOT_MAX_JOURNAL_BYTES));
+      const databaseFacts = this.fileChecked(databaseHandle, this.cohort.database, binding, context,
+        BigInt(this.cohort.maxDatabaseBytes));
+      const journalFacts = this.fileChecked(journalHandle, this.cohort.journal, binding, context,
+        BigInt(this.cohort.maxJournalBytes));
       if (databaseFacts.identity === journalFacts.identity
         || fresh && (databaseFacts.size !== 0n || journalFacts.size !== 0n)) refuse();
       let header: Uint8Array = new Uint8Array(0);
       if (!fresh) {
-        if (databaseFacts.size < BigInt(WINDOWS_SNAPSHOT_PAGE_SIZE)
-          || databaseFacts.size % BigInt(WINDOWS_SNAPSHOT_PAGE_SIZE) !== 0n) refuse();
-        header = headerChecked(this.api.readPrefix(databaseHandle, 100));
+        if (databaseFacts.size < BigInt(this.cohort.pageSize)
+          || databaseFacts.size % BigInt(this.cohort.pageSize) !== 0n) refuse();
+        header = headerChecked(this.api.readPrefix(databaseHandle, 100), this.cohort);
       } else {
         this.api.flushDataFile(databaseHandle); this.binding(binding, context);
         this.api.flushDataFile(journalHandle); this.binding(binding, context);
@@ -220,17 +238,17 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
         if (closed) throw new WindowsNativeError('windows_native_unavailable');
         try {
           this.binding(binding, context); this.inventoryChecked(binding, context);
-          const currentDatabase = this.fileChecked(databaseHandle, WINDOWS_SNAPSHOT_DATABASE, binding, context,
-            BigInt(WINDOWS_SNAPSHOT_MAX_DATABASE_BYTES));
+          const currentDatabase = this.fileChecked(databaseHandle, this.cohort.database, binding, context,
+            BigInt(this.cohort.maxDatabaseBytes));
           const currentJournal = this.journalChecked(journalHandle, binding, context);
           if (currentDatabase.identity !== databaseFacts.identity || currentJournal.identity !== journalFacts.identity
             || currentDatabase.identity === currentJournal.identity) refuse();
           // Only this invocation's fresh pair may still be empty before SQLite
           // bootstrap. Once bytes exist, the full fixed header is mandatory.
           if (fresh && currentDatabase.size === 0n && currentJournal.size === 0n) return;
-          if (currentDatabase.size < BigInt(WINDOWS_SNAPSHOT_PAGE_SIZE)
-            || currentDatabase.size % BigInt(WINDOWS_SNAPSHOT_PAGE_SIZE) !== 0n) refuse();
-          headerChecked(this.api.readPrefix(databaseHandle, 100)); this.binding(binding, context);
+          if (currentDatabase.size < BigInt(this.cohort.pageSize)
+            || currentDatabase.size % BigInt(this.cohort.pageSize) !== 0n) refuse();
+          headerChecked(this.api.readPrefix(databaseHandle, 100), this.cohort); this.binding(binding, context);
         } catch (error) { safeFailure(error); }
       };
       const close = (): void => {
@@ -251,6 +269,22 @@ export class WindowsNativeSnapshotGuard implements WindowsSnapshotGuard {
       return safeFailure(error);
     }
   }
+}
+
+/** API-key fixture boundary remains pinned to its original closed cohort. */
+export class WindowsNativeSnapshotGuard extends ClosedWindowsSnapshotGuard {
+  constructor(lease: LeaseAuthority, api: WindowsSnapshotFileApi, inventory?: Inventory) {
+    super(lease, api, API_KEY_COHORT, inventory);
+  }
+}
+/** Explicit trusted fault-fixture boundary for the separate delegated cohort. */
+export function bindWindowsDelegatedSnapshotGuardForTrustedPorts(lease: LeaseAuthority,
+  api: WindowsSnapshotFileApi, inventory?: Inventory): WindowsSnapshotGuard {
+  return new ClosedWindowsSnapshotGuard(lease, api, DELEGATED_COHORT, inventory);
+}
+export async function createWindowsDelegatedSnapshotGuard(lease: WindowsNativeLease): Promise<WindowsSnapshotGuard> {
+  if (!(lease instanceof WindowsNativeLease)) refuse();
+  return new ClosedWindowsSnapshotGuard(lease, await createWindowsSnapshotFileApi(), DELEGATED_COHORT);
 }
 
 export async function createWindowsNativeSnapshotGuard(lease: WindowsNativeLease): Promise<WindowsNativeSnapshotGuard> {
