@@ -1,4 +1,9 @@
-# Inactive delegated login attempt
+# Inactive delegated login and family foundations
+
+The callback section records the cohort accepted at
+`f19f738dbe9bc00550c27a77a46c412f7d9d2cfc`. Its 29-test and package evidence is
+historical and bound to that source. The adapter-neutral family follow-on is
+reviewed separately below; neither cohort enables Platform login.
 
 This is the first client boundary for [design section 6.2](../../../internal-docs/Developer%20Toolchain%20Design.md#62-platform-login-flow)
 and implementation task T09. `src/delegated-login.ts` has no command importer.
@@ -55,3 +60,71 @@ remain separate from the final source-bound preparation receipts.
 The native redirect and PKCE choices follow [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252)
 and [RFC 7636](https://www.rfc-editor.org/rfc/rfc7636). This narrow client does not
 claim a complete OAuth client or a deployed authentication flow.
+
+## Adapter-neutral refresh-family follow-on
+
+`src/delegated-family-state.ts` and `src/delegated-family-engine.ts` add an
+inactive data format and state machine for design sections 6.2–6.3 and T09.
+No command imports them. API-key environment-v1 and secure API-key profiles,
+their Windows credential adapter, and the callback implementation remain
+unchanged. `bota-delegated-family-v1` and `bota/delegated/refresh/v1` are explicit
+separate delegated namespaces, with no reinterpretation or migration of keys.
+
+The trusted assembly seam receives one definitively returned token pair through
+an opaque one-use handoff; consuming it must not perform or retry a code
+exchange. The engine independently requires authoritative access verification
+before deriving the server-family lease, and repeats verification inside that
+lease before enrollment. Requested deployment resources never establish granted
+authority. Issuer, client, user, organization, project, grant, family, granted
+resources and grant scopes are pinned independently from the access token's one
+resource, scope subset and expiry. Canonical server UUIDs have no version gate;
+independently generated local IDs retain the local v4 requirement.
+
+Every operation uses one pinned parent cancellation/deadline authority through
+a retiring child signal and frozen assertion facade. The facade cannot extend
+the original budget; after settlement or defective early lease release it is
+unusable, and the child signal is aborted. Started callback work is joined before
+return. Errors are fresh fixed projections of known diagnostic fields. Mutated
+error messages, causes, accessors, forged objects and proxy hooks cannot escape
+through an injected port error. A lease rejection is recorded separately from
+its payload, including `throw undefined` and `throw null`.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| Separate delegated schema, no API-key adoption | Exact format/namespace, dense bounded own-data fields, canonical copied UTF-8 bytes, API-key and reflective input refusals | Matched for inactive schema/codec only. No native persistence format is activated. |
+| Authoritative enrollment and binding | One-use opaque handoff, current credential verification before and within lease, scope/resource narrowing and identity-retarget negatives | Matched through trusted injected authority ports. No backend identity endpoint or HTTP token response is consumed. |
+| One family across CLI/MCP resources and aliases | Canonical store + issuer + client + server-family key; fresh snapshot and identity before caller action; concurrent resource rotations and initial enrollment collision tests | Matched for source ordering under a portable mock mutex. Native cross-process locking remains unqualified. |
+| Durable intent before one refresh | `ready` → `refreshing` CAS before exchange; lost response leaves `refreshing`/`suspended`; three engine instances refuse all cached access without identity/business calls | Matched in injected crash/race tests. Unknown remote exchanges are never replayed or adopted. |
+| Atomic rotation and retained consumed proof | Verified successor write/readback; one whole-family CAS changes current, prior consumed proof and `localGeneration`; only the older superseded proof is then deleted and proven absent | Matched through injected atomic CAS/store ports. `localGeneration` makes no server-generation claim. |
+| Unknown local acknowledgment differs from unknown remote response | Lost ready-CAS acknowledgment permits a later exact durable ready read; pre-rotation uncertainty remains blocking; no old refresh is resubmitted | Matched in fault fixtures. Adapters must preserve the same durable acknowledgment and exact readback contracts. |
+| Revocation despite ordinary authority loss | Current or last definitively consumed refresh proof identifies its family; unknown revocation blocks use and only explicit recovery repeats that exact proof | Matched against a synthetic backend contract retaining consumed proofs. No real revocation request is made. |
+| Exact removal and recoverable uncertainty | Durable `removing` inventory before deletes; exact absence proof and CAS progress; unknown delete is not blindly repeated; removed tombstone retained | Matched in source fixtures. Accepted revoking/revoked cleanup is bounded to one extra ref, keeping the complete removal inventory within three refs. Missing proof cannot falsely establish revocation. |
+| Cancellation after effects requires recovery | Pre-effect cancellation/deadline reports no recovery; metadata/store/exchange/revocation/caller-effect boundaries preserve fixed errors with `recoveryRequired: true` | Matched in bounded synthetic effect-boundary tests. No pending intent or credential reference is discarded. |
+| Complete secure delegated login | No HTTP transport, native snapshot/store/lease adapter, browser launcher, profile command or CLI/MCP credential selection integration | Not implemented by this cohort. Platform login remains inactive; existing API-key behavior remains the enabled path. |
+
+All **37 focused family tests** and strict types pass on **Node 22.23.2 and
+24.19.0**. The immutable ignored source/log receipt is
+`delegated-family-source-receipt.json`, SHA-256
+`a196a6066198fe21ab8e86f6bfb9c835ec6c8998b231902339b5b937fdec73bb`,
+recorded at `2026-10-22T00:34:42.877Z`. It binds the exact three new source/test
+files and both focused/type logs. Fixtures use synthetic opaque credentials and
+in-memory metadata/store/authority ports; they open no native credential store,
+database, HTTP listener or external API. Independent review closed the issued
+context-lifetime, recovery-flag, cleanup-closure, mutable-error privacy and
+undefined-rejection findings with regression coverage.
+
+The earlier callback's subsequent clean qualification is retained separately in
+`delegated-login-attempt-clean-delivery-receipt.json`, SHA-256
+`b0525de1bbac9b10b83e9407f20496a1f7010b834a7c2e50c26957593ee96ff4`.
+That receipt records callback source `f19f738d`, its 29 tests, both pinned clean
+offline installed-package checks and exact hosted CI `39696736013`. It is not
+native delegated enrollment or qualification of this follow-on engine. This
+cohort's clean committed package and hosted checks are separate delivery receipts.
+
+The owner upstream removal of internal engineering harness files at `fb9661ff`
+is preserved. Current package provenance must derive its source inputs from the
+current clean commit rather than inherit the old callback input count. Native
+cross-process leases, durable credential/metadata adapters, HTTP grant/identity
+admission, installed enrollment and recovery, and deployed Platform authorization
+remain explicit gates before command activation. Browser logout remains separate
+from developer-session family revocation under the owner's selected policy.
