@@ -1,4 +1,0 @@
-interface:
-  display_name: "Bota Code Change"
-  short_description: "Implement and verify a scoped Bota code change"
-  default_prompt: "Use $bota-code-change to implement this issue and return the change with relevant validation evidence."

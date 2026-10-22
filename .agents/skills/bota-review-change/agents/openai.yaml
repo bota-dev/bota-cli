@@ -1,4 +1,0 @@
-interface:
-  display_name: "Bota Change Review"
-  short_description: "Review Bota changes for behavior and regression risk"
-  default_prompt: "Use $bota-review-change to review this diff against its acceptance criteria and report actionable findings."
