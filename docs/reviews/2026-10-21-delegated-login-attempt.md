@@ -824,3 +824,59 @@ This is neither actual browser/SSO/TLS nor the full private application, install
 CLI/publication, fresh cross-process/crash qualification or live Platform login.
 The deployment resolver remains configuration-off. CLI source CI39853366259
 passes; complete configured/deployed acceptance remains open.
+
+## Packed developer configuration-off consumer
+
+This increment changes verification only: `scripts/verify-package.mjs`, a
+non-shipped `scripts/packed-developer-guard.mjs` preload, and its14 focused child
+tests. Product runtime, deployment resolver, credential formats and endpoint
+authority are unchanged. The production resolver remains configuration off.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| Exercise the actual installed candidate and production resolver | The validated installed `bin.bota` entrypoint runs through Node with the guard preloaded before entrypoint evaluation. Nine probes cover no-key `auth login --identity-only`, selected status/device list/hosted MCP, profile list/show/recover/logout and selected auth logout, using a fresh task name. | Matched. No service/runtime/config replacement. |
+| Refuse before bootstrap, fallback or publication | Every probe requires exit1, exact `developer_configuration_unavailable` JSON with recovery/effect flags false, empty stdout, no secret canary or native warnings, and all eight effect-attempt counters zero. An environment API-key canary cannot satisfy delegated selection. | Matched installed Windows consumer on both pins; counters are instrument evidence. |
+| Install fail-closed tripwires before application evaluation | Synchronous ESM/CJS hooks refuse SQLite, Koffi and native addons; a `dlopen` fallback and guarded spawn/worker/process-control, fetch/socket/listen/DNS and selected filesystem APIs refuse before delegation. Focused synthetic tests verify each category, including ESM/createRequire SQLite refusal without loading it. | Matched14/14 on both pins; not a JavaScript/OS security sandbox. |
+| Preserve release/package compatibility | Both installed lanes retain the complete original18 checks, frozen consumer lock, MIT/license checks, source/bundle provenance and exact six-file package allowlist. The new developer check is appended as check19; the guard is absent from the tarball. | Matched. Candidate remains unpublished; registry publication/approval policy is unchanged. |
+| Preserve existing source behavior | Final normal suites pass853 tests/849 passed/4 expected skips on each Node24.19.0 and22.23.2. All5,150 source/test/installed-dependency inputs and source HEAD remain unchanged through those runs. | Matched normal source regression cohort; no canonical native/PG protocol is repeated. |
+
+Root review caught an unsafe *test argument*: the first synthetic process-control
+probe used `process.kill(-1)`. The original guard intercepted it, but it would
+have been dangerous if that guard regressed. After the conserved historical run
+joined, the fixture changed to harmless `process.kill(process.pid,0)`. Fresh
+final full/packed lanes bind that safe fixture; earlier receipts/logs remain
+historical. No unrelated process signal was delegated by the guard.
+
+Final full-suite receipt `packed-developer-off-full-v2/receipt.json`, SHA256
+`55e3558eff02637b3aaf30cca8c0c98522e6a7346840060c82824efece01077a`, binds
+HEAD `1e00f1317020b67528419eb855db35f119abbda7` plus the exact reviewed dirty
+candidate. Final packed-v2 `receipt.json` SHA256
+`b5b84d0b8fa1aed002ae7e26c94405d1f42343fb21a9e9d0e66c714edc3480c6`
+binds the same candidate:14 focused tests plus19 package checks/nine installed
+developer commands/six package files each runtime. The independent read-only
+`packed-developer-off-independent-v1.json` passes, SHA256
+`d9fcc8c3760b9938a0883aaf155369efa6adc0799ba5271157adad078b1a66ff`;
+it rechecks all5,150 current inputs, logs/runtime/helper/receipt hashes and both
+archive manifests/provenance/license bodies. No clean-commit/publication claim
+follows from this preflight.
+
+The guard intentionally permits Node module-loader reads, its captured temporary
+report writer, and six exact public Linux WSL/container metadata paths needed by
+existing `open` dependency imports. Their separate read count is retained;
+Windows reports0. Parent package installation, its task-owned temporary cleanup
+and runtime startup are outside the child counters. Direct internal bindings,
+previously captured runtime internals, file-descriptor APIs outside the listed
+hooks, `process.exit` and general adversarial escapes are not
+qualified. The public `dgram.Socket` constructor and `fs.openAsBlob`, `glob` and
+`globSync` APIs are also outside these hooks; the selected current CLI source
+does not call them. The guard covers the current production bootstrap/effect seams; it
+does not establish universal absence of all OS activity.
+
+The existing temporary HOME is solely legacy-config isolation. It does not move
+the OS-selected delegated root, change native credentials, repair ACLs or supply
+an issuer. New probes perform no real credential/native-store/ACL, browser,
+database, cloud or live-account operation. Existing normal-suite read-only
+KnownFolder checks remain their own source evidence. Linux behavior of the new
+packed probes awaits hosted qualification; no local Linux acceptance is claimed.
+Native persistence/cross-process safety, deployed TLS/ingress and a real Platform
+account journey remain separate acceptance gates.

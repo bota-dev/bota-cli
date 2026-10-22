@@ -141,6 +141,15 @@ consent, deployed HTTPS/TLS or a complete production login journey. The new
 Windows delegated store uses a separate OS-selected profile leaf; it neither
 repairs inherited AppData permissions nor falls back to plaintext storage.
 
+The installed packed consumer separately checks the unchanged configuration-off
+resolver. A verification-only preload runs before the real installed entrypoint
+and refuses guarded process, network, native-module and filesystem effects.
+Nine developer commands must return the fixed configuration error, with empty
+stdout and zero guarded effect attempts. Module-loader reads, six exact public
+Linux startup metadata paths and the instrument's own report write are allowed.
+These tripwires cover the current bootstrap seams; they are not an adversarial
+sandbox or evidence of a configured native login. The preload is not shipped.
+
 Activation requires the reviewed native source/runtime cohort, exact trusted
 server/client configuration, deployed ingress/Portal/resource acceptance and a
 real Platform-account end-to-end receipt. Until those checks pass, configuration

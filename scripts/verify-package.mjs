@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npmCli = process.env.npm_execpath;
@@ -82,6 +82,55 @@ try {
   assert.equal(secureHelp.stderr, '', 'help must not bootstrap optional native storage');
   const migrationHelp = await cli(['auth', 'secure-profiles', 'migrate', '--help']);
   assert.match(migrationHelp.stdout, /--from-env/); assert.equal(migrationHelp.stderr, '');
+  // Run the actual installed executable, with tripwires installed BEFORE its
+  // entrypoint. HOME above remains legacy-config isolation only: it does not
+  // relocate the new OS-selected native root or Credential Manager namespace.
+  const guard = join(root, 'scripts/packed-developer-guard.mjs');
+  const guardDirectory = join(temporary, 'developer-guards'); await mkdir(guardDirectory);
+  assert.deepEqual(installed.bin, pkg.bin);
+  const installedEntry = resolve(consumer, 'node_modules/@bota.dev/cli', installed.bin.bota);
+  assert.equal(installedEntry, resolve(consumer, 'node_modules/@bota.dev/cli/dist/index.js'));
+  const developerName = 'packed-dev-' + randomUUID(), developerProbes = [];
+  const effectKeys = ['process_spawn', 'process_control', 'worker_spawn', 'network_request', 'network_listen',
+    'native_module', 'filesystem_read', 'filesystem_write'].sort();
+  const developerCommands = [
+    ['auth', 'login', '--identity-only'],
+    ['--developer-profile', developerName, 'auth', 'status'],
+    ['--developer-profile', developerName, 'devices', 'list'],
+    ['--developer-profile', developerName, 'mcp', '--mode', 'hosted'],
+    ['auth', 'developer-profiles', 'list'],
+    ['auth', 'developer-profiles', 'show', developerName],
+    ['auth', 'developer-profiles', 'recover', developerName],
+    ['auth', 'developer-profiles', 'logout', developerName],
+    ['--developer-profile', developerName, 'auth', 'logout'],
+  ];
+  console.log('Checking installed Platform configuration refusal under pre-entrypoint effect tripwires.');
+  for (const args of developerCommands) {
+    const report = join(guardDirectory, 'probe-' + randomUUID() + '.json');
+    let refusal;
+    try { await run(process.execPath, ['--import', pathToFileURL(guard).href, installedEntry, '--json', ...args], consumer, {
+      BOTA_PACKED_GUARD_DIRECTORY: guardDirectory, BOTA_PACKED_GUARD_REPORT: report,
+      BOTA_PACKED_GUARD_MODULES: join(consumer, 'node_modules'),
+      BOTA_API_KEY: 'sk_test_SYNTHETIC_PACKED_DEVELOPER_CANARY',
+    }); } catch (error) { refusal = error; }
+    assert.ok(refusal, 'configuration-off command must refuse');
+    assert.equal(refusal.code, 1); assert.equal(refusal.signal, null); assert.equal(refusal.killed, false);
+    assert.equal(refusal.stdout, '', 'configuration refusal must publish no stdout');
+    assert.doesNotMatch(refusal.stderr, /SYNTHETIC_PACKED_DEVELOPER_CANARY|ExperimentalWarning|SQLite|WinCred|koffi|native bootstrap/i);
+    assert.deepEqual(JSON.parse(refusal.stderr), { error: {
+      code: 'developer_configuration_unavailable', message: 'Platform developer login is not configured for this build.',
+      recovery_required: false, operation_may_have_executed: false,
+    } });
+    const reportBytes = await readFile(report), observed = JSON.parse(reportBytes);
+    assert.equal(observed.schema_version, 1); assert.equal(observed.instrument, 'packed-developer-default-off-v1');
+    assert.equal(observed.installed_before_entrypoint, true); assert.equal(observed.exit_code, 1);
+    assert.deepEqual(Object.keys(observed.effects).sort(), effectKeys);
+    assert.ok(Object.values(observed.effects).every(count => count === 0), 'configuration refusal must precede every guarded effect attempt');
+    assert.ok(Number.isSafeInteger(observed.permitted_linux_startup_metadata_reads) && observed.permitted_linux_startup_metadata_reads >= 0);
+    developerProbes.push({ args, code: 'developer_configuration_unavailable', stdout_empty: true,
+      effects: observed.effects, permitted_linux_startup_metadata_reads: observed.permitted_linux_startup_metadata_reads,
+      report_sha256: sha256(reportBytes) });
+  }
   const calls = [];
   const identity = { project_id: 'proj_release_fixture', organization_id: 'org_release_fixture', key_id: 'sk_release_identifier',
     key_type: 'restricted', is_test_mode: false, scope_mode: 'restricted', scopes: [] };
@@ -139,11 +188,17 @@ try {
     node: process.version, npm: (await npm(['--version'])).stdout.trim(),
     consumer_environment_keys: Object.keys(env).sort(),
     consumer_lock_sha256: createHash('sha256').update(frozenLock).digest('hex'), resolved_dependencies: resolved,
+    developer_configuration_off: { guard_sha256: sha256(await readFile(guard)), probes: developerProbes,
+      scope: 'Installed production entrypoint and unchanged trusted resolver; guarded effect-attempt evidence, not actual native qualification.',
+      limits: ['Node module-loader reads, six exact public Linux is-wsl/container metadata paths, parent installation/temporary cleanup and the captured guard-report writer are permitted.',
+        'No adversarial-sandbox claim for direct internal bindings, previously captured runtime internals, process.exit or OS/runtime startup effects.',
+        'Existing temporary HOME isolates legacy config only; no new native root, credential-store or endpoint redirection.'] },
     checks: ['installed-version', 'source-version', 'installed-source-license', 'installed-help', 'installed-hosted-mode-help', 'installed-secure-profile-help-no-native-bootstrap',
       'installed-secure-selector-refusal', 'installed-secure-origin-refusal-before-storage', 'synthetic-empty-scope-identity',
       'installed-secure-migration-explicit-input',
       'installed-environment-profile-enrollment', 'installed-profile-status-one-preflight', 'installed-profile-local-list-removal',
-      'frozen-consumer-lock', 'installed-provenance', 'bundle-and-input-hashes', 'direct-runtime-versions', 'consumer-dependency-licenses'] };
+      'frozen-consumer-lock', 'installed-provenance', 'bundle-and-input-hashes', 'direct-runtime-versions', 'consumer-dependency-licenses',
+      'installed-developer-configuration-off-pre-entrypoint-tripwires'] };
   await writeFile(join(artifact, 'package-receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`);
   console.log(`Packed consumer passed: ${pkg.name}@${pkg.version}; ${packed.files.length} package files. Publication remains ${provenance.publication_blockers.length ? 'BLOCKED (see receipt)' : 'subject to separate exact-source approval'}.`);
 } finally {
