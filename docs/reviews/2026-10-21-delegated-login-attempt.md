@@ -298,3 +298,53 @@ No endpoint URL is guessed and no token egress, native store, command/browser
 activation, registry or deployment action occurs. Initial enrollment durability,
 abandoned-grant cleanup, real TLS/admission and native cross-process acceptance
 remain open; Platform login remains inactive.
+
+## Inactive REST delegated-identity transport
+
+The parsed codec above is delivered at `0a5f259c1ed0ce7e3217c088114463ee54965db5`.
+This increment adds a separate REST-only verifier. Its required identity URL
+must exactly equal the configured REST origin and path prefix followed by
+`/auth/delegated-identity`; root resources use an empty prefix. There is no
+endpoint discovery, redirect alias, inferred production deployment or command
+importer. Existing token/callback/family/codec source is unchanged.
+
+The verifier requires the selected REST resource before egress and sends one
+GET with the access bearer in its header. MCP resource requests are refused
+without a REST fallback. An opaque token's actual audience cannot be inferred
+from its bytes: the backend must enforce it, while the existing token adapter
+and family engine retain their resource/binding checks. The request uses
+captured native fetch, HTTPS configuration, no redirects, cookies or retries.
+
+A 16KiB decoded-body bound, exact successful JSON response and raw duplicate
+member rejection precede the existing fourteen-to-twelve-field codec. The
+bounded wire-shape walk detects escaped duplicate keys and accepts key-like
+string content without mistaking it for a member. Nested extensions, BOM,
+invalid UTF-8, private fields and stale/wrong authority are refused. Relative
+token expiry never substitutes for the authoritative identity expiry.
+
+The original native parent signal, budget object and assertion are pinned
+before and after their use. One monotonic maximum thirty-second child budget
+cannot extend the parent. The child is retired, response/body cancellation is
+awaited, the reader is released and parent listeners are removed before any
+result is returned. Captured native response/body slots ignore shadow getters.
+Failures expose a fresh fixed diagnostic, without raw response/error/cause.
+Trusted replacement transports must honor cancellation and own their I/O;
+arbitrary uncooperative transports have no universal bounded-join guarantee.
+
+All **15 focused checks and strict types pass on Node 24.19.0 and 22.23.2**.
+They exercise actual loopback GET/redirect/status/body behavior, resource
+refusal, raw duplicates, schema/expiry boundaries, cancellation before headers
+and during a stalled body, the finite deadline, context retargeting and native
+slot/body cleanup. Explicit trusted mapping supplies owned HTTP for configured
+HTTPS URLs. This proves neither production TLS nor a mounted backend endpoint.
+Source/log/dependency/runtime receipt `rest-identity-http-source-receipt.json`
+has SHA-256
+`56a6cd6c4138a7b6523172798a35b906ed918eeb1c85357b938804c6ae8cf7cc`.
+Independent scoped review found no remaining concrete issue.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| Explicit resource-aware identity read | Exact configured REST endpoint, one actual GET and pre-egress wrong-resource negatives | Matched for this private REST transport. Opaque token audience remains server-enforced; MCP needs its own transport. |
+| Strict authenticated response boundary | Success/status/header/body bounds, escaped raw duplicate rejection and committed identity codec | Matched in owned HTTP fixtures. Live backend, certificate trust and ingress remain unqualified. |
+| Retiring authority and owned response cleanup | Parent retargeting/expiry, pre-header and stalled-body cancellation, deadline, captured native slots and fixed failures | Matched with cooperative actual native fetch/body work. No arbitrary-port universal-join claim. |
+| Shared login activation | No command/browser/native store or initial enrollment producer | Partial. Durable initial proof retention, native family coordination, configured consent and live acceptance remain open. |
