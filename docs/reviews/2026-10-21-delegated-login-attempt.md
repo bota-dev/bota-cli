@@ -171,3 +171,78 @@ Independent scoped review reports no remaining actionable finding. The existing
 schema/codec and callback files are unchanged; only the inactive engine port and
 its tests change. There is still no HTTP/native adapter, delegated credential
 installation, command activation, browser launch or enabled Platform login.
+
+## Inactive one-attempt HTTP component
+
+The preceding bound-port source is accepted at
+`eb402d5c0108a269602401feda2bd8a98d6fb991`. Its historical clean receipt,
+`delegated-bound-revocation-clean-delivery-receipt.json`, has SHA-256
+`f553a0ec00699a11db0efa4ffa6dbd9a39e86e8c11a4fac69da11197cfaec937`.
+It binds the previous 41-test family contract and hosted CI `39701858726`.
+
+`src/delegated-http.ts` adds a standalone inactive HTTP component. Production
+construction captures native fetch and requires a frozen explicit HTTPS
+deployment plus a mandatory resource-aware identity verifier. The separate
+`ForTrustedPorts` factory is a trusted assembly seam, with no CLI, environment,
+root override or production fallback. No identity route, URL or wire schema is
+selected or discovered: the mandatory verifier remains an explicit read-only
+authority port and may not mutate SQL, credentials or other native state.
+
+An original completed callback handle permits one code exchange across factory
+instances. Code, verifier and redirect come from that owned handle; the code is
+never retried after submission or an unknown result. The definitive result may
+later enter the existing one-use enrollment handoff; consuming a handoff must
+never hide a code exchange. Refresh and exact-bound revocation each send one
+form POST to the configured endpoint, with no bearer/cookie forwarding, redirect
+following or automatic retry. Existing refresh and consumed revocation proofs
+remain usable after process restart; they do not require the access-token ledger.
+
+Access verification accepts only currently issued transient tokens from this
+factory, for their exact configured REST or MCP resource. Unknown, wrong-resource
+or another-factory access tokens fail before verifier egress. This bounded
+128-entry ledger contains no refresh token and is not durable access caching.
+Every admitted use still calls the authoritative verifier and compares its
+current identity. Token wire resource, scopes, grant and family must match that
+authority; a code result cannot expand requested grant resources or scopes.
+
+`expires_in` is explicitly a **range-only relative hint**: an integer from one
+through 300 seconds. It is not reconciled across server/client clocks or treated
+as proof of exact absolute expiry. A fixture deliberately uses a one-second hint
+with a separately authoritative absolute expiry, making this limitation visible.
+The normalized pair uses only that exact identity expiry; the family engine
+continues to compare it exactly. No `now() + expires_in` expiry is manufactured.
+Selecting a cross-clock plausibility rule or an absolute wire expiry extension
+remains future contract work.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| One configured attempt, no credential redirect/retry | Exact form/header assertions, owned callback, consumed attempt after lost response, foreign owned redirect sink receives zero requests | Matched in component fixtures. No browser or external issuer is contacted. |
+| Wire and identity admission | Strict flat token body, canonical opaque credentials/IDs, exact resource/scopes/grant/family comparison, requested-authority expansion refusals | Matched through a mandatory trusted identity port. A production identity route and codec remain unselected. |
+| Bounded owned token/revoke body | Explicit 16 KiB advertised and decoded bound; gzip overflow, duplicates, BOM, invalid UTF-8, truncated body and fixed diagnostics | Matched using actual owned HTTP and native fetch response streams. The external identity port needs its own qualified HTTP body/cleanup contract. |
+| Original operation authority and total deadline | Pinned parent signal/budget/assertion, own-data retarget refusal, retiring child, 30-second maximum whole-call budget with a monotonic deadline | Matched in cancellation, retarget, delayed-timer and late-publication fixtures. The timer alone is never expiry proof. |
+| Read-only verifier withdrawal | Never-settling and late verifier fixtures return fixed failure, retire authority, observe/discard late completion and publish no ledger entry | Matched for bounded public settlement. An uncooperative underlying verifier may outlive the returned method; universal join is not claimed. |
+| Native response/body cancellation join | Unfinished actual response cancellation and delayed/rejected reader cancellation prevent credential publication until owned cleanup settles | Matched for these qualified native-fetch fixtures. An arbitrary uncooperative injected fetch/body cannot establish universal cleanup bounds. |
+| Bound revocation before proof removal | HTTP 200 plus exact positive `bota_revoked` and both expected IDs; empty/malformed responses stay unknown | Matched in actual HTTP plus portable engine composition: proofs remain in `revoking`, cached access/removal block, then explicit matching recovery permits exact cleanup. The mock lease is not native cross-process qualification. |
+| Unknown mutation status | `mutationSubmitted: true` after POST entry, including body, identity, cancellation and cleanup failures | Matched in fixture assertions. A failed code exchange is never described as safe to replay. |
+| Complete initial enrollment and Platform login | No native attempt journal, durable initial proof retention, command imports or browser launcher | Not implemented. An abandoned initial grant after a definitive token response and failed identity verification may remain remotely active; future enrollment must own durable attempt/cleanup recovery before activation. Unknown grants require explicit Platform revoke-developer-access or expiry recovery. No automatic revocation is added. |
+
+All **21 HTTP component tests** and strict types pass on **Node 22.23.2 and
+24.19.0**. The immutable ignored source/log receipt is
+`delegated-http-source-r2-receipt.json`, SHA-256
+`36f97523434649e8046b10840f7ef10dccd0f5d55cf436672173cff6f35d116c`,
+recorded at `2026-10-22T01:11:01.239Z`. These include actual loopback token,
+revocation and fixture-identity reads through an explicit trusted mapping from
+configured HTTPS URLs to owned loopback HTTP. They qualify HTTP component
+behavior, not production TLS, a deployed identity endpoint, native credential
+storage or real Platform enrollment. Independent review closes the concrete
+deadline/authority findings; root review closes the monotonic and context fixes.
+
+Initial fixture work incorrectly canceled a stream still locked by
+`Response.json()` and expected a read-only verifier to have mutation status.
+Those fixture errors were corrected without relaxing production checks. The
+first receipt helper then selected the old family test filename; its total-count
+guard refused the run. Its logs are retained separately; only the explicit r2
+receipt above qualifies this source. Earlier callback/family receipts remain
+historical. No API-key path, callback, family schema/engine or command importer
+changes in this cohort; no native store, external account, registry or deployment
+operation is performed. Platform login remains inactive.
