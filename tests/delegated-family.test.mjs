@@ -32,7 +32,7 @@ function retired(actualContext) {
 function fixture(overrides = {}) {
   const d = deployment(), ctx = context(), snapshots = new Map(), secrets = new Map(), identities = new Map();
   const originalBudget = ctx.value.budget;
-  const f = { d, ctx, snapshots, secrets, identities, issuedContexts: [], time: 1000, held: 0, maxHeld: 0, events: [], exchanges: [], revokes: [], writes: [], deletes: [],
+  const f = { d, ctx, snapshots, secrets, identities, issuedContexts: [], time: 1000, held: 0, maxHeld: 0, events: [], exchanges: [], revokes: [], revokeBindings: [], writes: [], deletes: [],
     publishFaults: [], writeFault: null, deleteFault: null, exchangeMode: null, revokeMode: null, identityHook: null, afterPublish: null, afterExchange: null,
     userId: randomUUID(), grantId: randomUUID(), familyId: randomUUID(), grantResources: [d.resources.rest, d.resources.mcp], grantScopes: ['devices:read', 'recordings:read'],
     ...overrides };
@@ -95,10 +95,13 @@ function fixture(overrides = {}) {
       if (f.exchangeMode === 'malformed_after') return { accessToken: canary };
       return value;
     },
-    async revoke(selected, refresh, actualContext) {
+    async revoke(selected, refresh, expected, actualContext) {
       locked('revoke', null, actualContext); assert.deepEqual(selected, d); f.revokes.push(refresh);
+      assert.ok(Object.isFrozen(expected)); assert.deepEqual(expected, { grantId: f.grantId, familyId: f.familyId });
+      f.revokeBindings.push(clone(expected));
       assert.equal(snapshot(f.key).state, 'revoking'); assert.ok(refresh === f.serverRefresh || f.consumed.has(refresh));
-      f.serverRevoked = true; if (f.revokeMode === 'unknown_after') return 'unknown'; return 'revoked';
+      if (f.revokeMode === 'not_submitted') return 'not_submitted';
+      f.serverRevoked = true; if (f.revokeMode === 'unknown_after') return 'unknown'; return Object.freeze({ grantId: f.grantId, familyId: f.familyId });
     }, nowSeconds: () => f.time,
   };
   f.engine = new DelegatedFamilyEngine(f.ports);
@@ -258,6 +261,80 @@ test('unknown revocation blocks all access/removal and repeats only exact proof 
   await assert.rejects(f.engine.withAccess(f.key, f.d.resources.rest, f.ctx.value, async () => assert.fail()), fails('pending'));
   f.revokeMode = null; const revoked = await f.fresh().recoverRevocation(f.key, f.ctx.value); assert.equal(revoked.state, 'revoked');
   assert.equal(f.revokes.length, 2); assert.equal(f.revokes[0], f.revokes[1]); assert.ok(f.consumed.has(f.revokes[0])); assert.equal(f.exchanges.length, 1);
+});
+
+test('revocation supplies frozen expected grant/family from the leased binding for current and consumed proofs', async () => {
+  for (const consumed of [false, true]) {
+    const f = fixture(consumed ? { grantId: '00112233-4455-7677-8899-aabbccddeeff', familyId: '00112233-4455-0677-0899-aabbccddeeff' } : {});
+    const initial = await f.seed(); if (consumed) await f.engine.refresh(f.key, f.d.resources.mcp, f.ctx.value);
+    const state = f.read(), original = f.ports.revoke; let captured;
+    f.ports.revoke = async (selected, refresh, expected, actualContext) => {
+      captured = expected; assert.deepEqual(expected, { grantId: state.binding.grantId, familyId: state.binding.familyId });
+      assert.ok(Object.isFrozen(expected)); assert.throws(() => { expected.familyId = randomUUID(); }, TypeError);
+      return original(selected, refresh, expected, actualContext);
+    };
+    const revoked = await f.engine.revoke(f.key, f.ctx.value); assert.equal(revoked.state, 'revoked');
+    assert.equal(f.revokes[0], f.initial.refreshToken); assert.deepEqual(f.revokeBindings, [captured]);
+    assert.equal(f.consumed.has(f.revokes[0]), consumed); assert.equal(f.secret(initial.current), f.initial.refreshToken);
+  }
+});
+
+test('empty200-like, raw wire, wrong binding or extra-field receipts retain proofs until exact explicit recovery', async () => {
+  const badReceipts = [
+    () => undefined, () => null, () => '', () => 200, () => ({}), () => 'revoked', () => 'unknown', () => 'not_submitted',
+    () => ({ status: 200, body: '' }),
+    f => ({ bota_revoked: true, bota_grant_id: f.grantId, bota_family_id: f.familyId }),
+    f => ({ grantId: randomUUID(), familyId: f.familyId }), f => ({ grantId: f.grantId, familyId: randomUUID() }),
+    f => ({ grantId: '00112233-4455-6677-8899-AABBCCDDEEFF', familyId: f.familyId }),
+    f => ({ grantId: f.grantId }), f => ({ familyId: f.familyId }),
+    f => ({ grantId: f.grantId, familyId: f.familyId, bota_revoked: true }),
+    f => ({ grantId: f.grantId, familyId: f.familyId, refreshToken: token('refresh') }),
+    f => ({ grantId: f.grantId, familyId: f.familyId, accessToken: token('access') }),
+    f => ({ grantId: f.grantId, familyId: f.familyId, error: canary }),
+  ];
+  for (const receipt of badReceipts) {
+    const f = fixture(); await f.seed(); await f.engine.refresh(f.key, f.d.resources.mcp, f.ctx.value);
+    const before = familyReferences(f.read()), original = f.ports.revoke;
+    f.ports.revoke = async (...args) => { await original(...args); return receipt(f); };
+    await assert.rejects(f.engine.revoke(f.key, f.ctx.value), recoveryFailure('revocation_unknown'));
+    assert.equal(f.read().state, 'revoking'); assert.deepEqual(familyReferences(f.read()), before); assert.equal(f.secrets.size, 2);
+    assert.equal(f.deletes.length, 0); assert.equal(f.revokes.length, 1);
+    const identityCount = f.events.filter(value => value === 'identity').length;
+    await assert.rejects(f.engine.withAccess(f.key, f.d.resources.rest, f.ctx.value, async () => assert.fail()), fails('pending'));
+    await assert.rejects(f.engine.remove(f.key, f.ctx.value), fails('pending')); await assert.rejects(f.engine.revoke(f.key, f.ctx.value), fails('pending'));
+    assert.equal(f.events.filter(value => value === 'identity').length, identityCount); assert.equal(f.revokes.length, 1); assert.equal(f.deletes.length, 0);
+    f.ports.revoke = original; assert.equal((await f.fresh().recoverRevocation(f.key, f.ctx.value)).state, 'revoked');
+    assert.equal(f.revokes.length, 2); assert.equal(f.revokes[0], f.revokes[1]); assert.deepEqual(f.revokeBindings[0], f.revokeBindings[1]);
+    await f.engine.remove(f.key, f.ctx.value); assert.equal(f.secrets.size, 0);
+  }
+});
+
+test('not-submitted revocation remains disabled without pretending the server revoked or retrying implicitly', async () => {
+  const f = fixture(); await f.seed(); f.revokeMode = 'not_submitted';
+  await assert.rejects(f.engine.revoke(f.key, f.ctx.value), recoveryFailure('revocation_unknown'));
+  assert.equal(f.serverRevoked, false); assert.equal(f.read().state, 'revoking'); assert.equal(f.revokes.length, 1); assert.equal(f.secrets.size, 1);
+  await assert.rejects(f.engine.remove(f.key, f.ctx.value), fails('pending')); assert.equal(f.deletes.length, 0);
+  f.revokeMode = null; assert.equal((await f.fresh().recoverRevocation(f.key, f.ctx.value)).state, 'revoked');
+  assert.equal(f.serverRevoked, true); assert.equal(f.revokes.length, 2); assert.equal(f.revokes[0], f.revokes[1]);
+});
+
+test('reflective or forged receipt shapes cannot confirm a family or evaluate private receipt hooks', async () => {
+  let hooks = 0;
+  for (const shape of ['accessor', 'proxy', 'inherited', 'extra_symbol', 'array']) {
+    const f = fixture(); await f.seed(); const original = f.ports.revoke;
+    const expected = { grantId: f.grantId, familyId: f.familyId };
+    let receipt;
+    if (shape === 'accessor') receipt = Object.defineProperty({ familyId: f.familyId }, 'grantId', { enumerable: true, get() { hooks++; throw Error(canary); } });
+    else if (shape === 'proxy') receipt = new Proxy(expected, { ownKeys() { hooks++; throw Error(canary); }, getOwnPropertyDescriptor() { hooks++; throw Error(canary); }, getPrototypeOf() { hooks++; throw Error(canary); } });
+    else if (shape === 'inherited') receipt = Object.create(expected);
+    else if (shape === 'extra_symbol') receipt = { ...expected, [Symbol(canary)]: canary };
+    else receipt = [f.grantId, f.familyId];
+    f.ports.revoke = async (...args) => { await original(...args); return receipt; };
+    await assert.rejects(f.engine.revoke(f.key, f.ctx.value), recoveryFailure('revocation_unknown'));
+    assert.equal(f.read().state, 'revoking'); assert.equal(f.secrets.size, 1); assert.equal(f.deletes.length, 0);
+    await assert.rejects(f.engine.remove(f.key, f.ctx.value), fails('pending'));
+  }
+  assert.equal(hooks, 0);
 });
 
 test('confirmed revocation removal persists disable/cleanup, proves each exact absence and retains a tombstone', async () => {

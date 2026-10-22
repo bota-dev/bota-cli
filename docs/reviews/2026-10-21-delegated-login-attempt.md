@@ -128,3 +128,46 @@ cross-process leases, durable credential/metadata adapters, HTTP grant/identity
 admission, installed enrollment and recovery, and deployed Platform authorization
 remain explicit gates before command activation. Browser logout remains separate
 from developer-session family revocation under the owner's selected policy.
+
+## Bound revocation confirmation follow-on
+
+The preceding family cohort is accepted source
+`369e5d286ececa074010491cc1469e57084b2672`. Its immutable clean delivery receipt,
+`delegated-family-clean-delivery-receipt.json`, has SHA-256
+`e03834665e33cc832ea351d312ad3839ea64fd0edd7a1c16b898ca619e552fd5`.
+That historical receipt binds its 37-test source, both pinned clean packages,
+and hosted CI `39700744295`; it also records the missing bound revocation gate.
+It is preserved unchanged rather than reinterpreted as this newer contract.
+
+An ordinary RFC7009 empty HTTP 200 intentionally does not prove that a named
+grant/family was revoked. This narrow follow-on replaces the trusted port's old
+`'revoked'` string with a definitive normalized `{ grantId, familyId }` result,
+or `'unknown'` / `'not_submitted'`. The engine supplies an independent frozen
+expected pair from the validated snapshot while holding the canonical family
+lease. It uses the same current or retained consumed proof as before.
+
+Only an exact two-field own-data object, with canonical server UUIDs equal to
+both expected IDs, permits the transition to `revoked`. Empty bodies, 200-like
+objects, old strings, raw wire envelopes, missing/mismatched IDs, extra credential
+fields, inherited/reflective/proxy shapes and unknown outcomes remain fixed
+`revocation_unknown` with `recoveryRequired: true`. The durable state stays
+`revoking`, every exact credential reference remains retained, all cached access
+and removal remain blocked, and no automatic retry occurs. Only explicit
+recovery resubmits the same proof and expected IDs.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| Expected authority comes from the leased family | Frozen pair captured for both current and consumed proofs, including canonical non-v4 server IDs | Matched in source fixtures. No caller-supplied replacement family ID is accepted. |
+| Definitive matching confirmation before removal | Exact two-field canonical binding validation, successful explicit recovery, then exact removal | Matched through the trusted normalized port; shape alone is not remote commit authority. |
+| Fail closed for empty or contradictory receipt | Nineteen malformed/empty/200/raw-wire/wrong-ID/extra-field cases, retained references and blocked cached access/removal | Matched in synthetic crash/recovery fixtures. No proof is discarded on an absent confirmation. |
+| Private receipt hooks cannot become authority or diagnostics | Accessor/proxy/inherited/array/symbol shapes refused, zero private hook evaluations | Matched at the normalized result validation boundary. |
+| Real HTTP revocation confirmation | Future adapter must use the configured trusted issuer/client endpoint and validate `bota_revoked: true`, `bota_grant_id` and `bota_family_id` against both expected IDs before producing the normalized pair | Unimplemented. Plain HTTP 200/empty body must map to unknown; standard empty-200 semantics remain separate. No HTTP adapter or request is introduced. |
+
+All **41 focused family tests** and strict types pass on **Node 22.23.2 and
+24.19.0**. The new immutable ignored source/log receipt is
+`delegated-bound-revocation-source-receipt.json`, SHA-256
+`5315dfc310b3c4e47a82c2f5e104111614c553c9147d0a0a438e6dca2edb61e4`.
+Independent scoped review reports no remaining actionable finding. The existing
+schema/codec and callback files are unchanged; only the inactive engine port and
+its tests change. There is still no HTTP/native adapter, delegated credential
+installation, command activation, browser launch or enabled Platform login.

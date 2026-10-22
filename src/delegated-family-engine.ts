@@ -17,6 +17,7 @@ export interface DelegatedTokenPair {
 export interface DelegatedVerifiedAccess extends DelegatedFamilyIdentity {
   readonly resource: string; readonly accessScopes: readonly string[]; readonly expiresAtSeconds: number;
 }
+export interface DelegatedRevocationBinding { readonly grantId: string; readonly familyId: string }
 export interface DelegatedFamilyPorts {
   readonly store: {
     readonly id: string;
@@ -43,9 +44,13 @@ export interface DelegatedFamilyPorts {
    * claims, a requested resource set, a profile label or a public copied DTO. */
   verifyAccess(deployment: DelegatedLoginDeployment, accessToken: string, resource: string, context: DelegatedFamilyContext): Promise<unknown>;
   exchange(deployment: DelegatedLoginDeployment, refreshToken: string, resource: string, context: DelegatedFamilyContext): Promise<unknown>;
-  /** Exact refresh proof, including consumed history, idempotently revokes its
-   * same family. Only explicit recovery may repeat this operation. */
-  revoke(deployment: DelegatedLoginDeployment, refreshToken: string, context: DelegatedFamilyContext): Promise<'revoked' | 'unknown' | 'not_submitted'>;
+  /** Trusted definitive commit confirmation for the expected grant/family and
+   * exact current/consumed proof. Ordinary RFC7009 empty200 is unknown, never a
+   * confirmation. A future HTTP adapter must verify its configured endpoint and
+   * explicit bound confirmation before normalizing these two IDs. Only explicit
+   * recovery may repeat this operation; no HTTP adapter is implemented here. */
+  revoke(deployment: DelegatedLoginDeployment, refreshToken: string, expected: DelegatedRevocationBinding,
+    context: DelegatedFamilyContext): Promise<DelegatedRevocationBinding | 'unknown' | 'not_submitted'>;
   nowSeconds(): number;
   newId?(): string;
 }
@@ -88,6 +93,13 @@ function pinned(actual: DelegatedFamilyIdentity, expected: DelegatedFamilyIdenti
   return ['issuer', 'clientId', 'userId', 'organizationId', 'projectId', 'grantId', 'familyId'].every(key =>
     actual[key as keyof DelegatedFamilyIdentity] === expected[key as keyof DelegatedFamilyIdentity])
     && sameFamilySet(actual.grantResourceUris, expected.grantResourceUris) && sameFamilySet(actual.grantScopes, expected.grantScopes);
+}
+function confirmedRevocation(value: unknown, expected: DelegatedRevocationBinding): boolean {
+  try {
+    const receipt = familyObject(value, ['grantId', 'familyId']);
+    return familyServerUuid(receipt.grantId) && familyServerUuid(receipt.familyId)
+      && receipt.grantId === expected.grantId && receipt.familyId === expected.familyId;
+  } catch { return false; }
 }
 interface Scope { readonly context: DelegatedFamilyContext; assertActive(): void }
 type TransientAccess = Pick<DelegatedTokenPair, 'accessToken' | 'resource' | 'expiresAtSeconds' | 'scopes'>;
@@ -353,9 +365,10 @@ export class DelegatedFamilyEngine {
     const proof = state.proof ?? state.current; if (!proof) familyFail('store_absent', true);
     const refresh = await this.read(proof, scope); if (!refresh) familyFail('store_absent', true);
     scope.assertActive(); let result: unknown;
+    const expected = Object.freeze({ grantId: state.binding.grantId, familyId: state.binding.familyId });
     this.markEffect(scope.context);
-    try { result = await this.ports.revoke(state.deployment, refresh, scope.context); } catch { return familyFail('revocation_unknown', true); }
-    scope.assertActive(); if (result !== 'revoked') familyFail('revocation_unknown', true);
+    try { result = await this.ports.revoke(state.deployment, refresh, expected, scope.context); } catch { return familyFail('revocation_unknown', true); }
+    scope.assertActive(); if (!confirmedRevocation(result, expected)) familyFail('revocation_unknown', true);
     return this.publish(key, state, this.next(state, { state: 'revoked', intent: null }), scope);
   }
   async revoke(key: DelegatedFamilyKey, context: DelegatedFamilyContext): Promise<DelegatedFamilySnapshot> {
