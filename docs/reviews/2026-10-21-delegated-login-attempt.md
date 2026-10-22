@@ -246,3 +246,55 @@ receipt above qualifies this source. Earlier callback/family receipts remain
 historical. No API-key path, callback, family schema/engine or command importer
 changes in this cohort; no native store, external account, registry or deployment
 operation is performed. Platform login remains inactive.
+
+## Inactive delegated identity response codec
+
+The preceding HTTP component is accepted source
+`59024c30837c27d1f74b37f47efd585bb190d306`. Its immutable clean delivery receipt,
+`delegated-http-clean-delivery-receipt.json`, has SHA-256
+`57d40e36a5050b3ed02f7692d83ac8c07fad4b9963721ffad5ec176c43f80723`.
+It binds the previous 21-test HTTP contract and hosted CI `39704353495`; the
+historical statement that the identity codec was unselected applies to that
+source. Those HTTP source/test bytes remain unchanged in this cohort.
+
+`src/delegated-identity.ts` adds a standalone parsed-value normalizer for the
+backend's committed `api/src/auth/developer-auth-identity.ts` schema, last owned
+at `2a0825c3ff7b180b6c516e7a61bf587ecc9566d3`. It accepts exactly the **14**
+snake-case server fields with `format_version: 1` and
+`credential_type: developer_delegation`, then returns exactly the engine's **12**
+normalized fields. The result and all authority arrays are copied and frozen.
+Canonical lowercase server UUIDs do not have an invented UUID-version gate.
+
+The caller must supply an explicit validated deployment, the actual configured
+REST or MCP resource and safe current seconds. The response issuer/client must
+match that deployment; grant resources must be registered, contain the actual
+resource and remain distinct from the client's full registration. Grant/access
+scopes come only from the response, are unique known read scopes, and access
+scopes must be a subset of grant scopes. Exact authoritative expiry must be
+after the supplied current time and within 300 seconds. The optional already
+trusted expected grant/family pair checks known-family consistency; the engine
+still owns comparison of the complete pinned user/org/project/resource/scope
+binding. Request scope sets and profile labels supply no authority.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| Backend wire and engine DTO alignment | Backend integration-fixture-shaped REST/MCP bodies, exact 14-to-12 projection and generic canonical server UUIDs | Matched in portable source fixtures; no cross-repository runtime import. |
+| Explicit resource, deployment and family consistency | Wrong issuer/client/resource/registration, missing grant resource and wrong optional expected IDs refused | Matched at the parsed-data boundary. A matching object is not proof of authentication. |
+| Authoritative permissions and exact expiry | Empty/subset scopes accepted; duplicate/unknown/escalated scopes, duplicate resources, expired/over-300-second/unsafe times refused | Matched without manufacturing expiry or expanding consent. |
+| Credential-free strict own-data boundary | Missing/unknown/private fields, accessors/proxies, inherited/non-enumerable/symbol fields and sparse/reflective arrays refused; private hook count remains zero | Matched with fixed fresh diagnostics and no cause or private input reflection. |
+| Copied immutable output | Top object and all three arrays frozen; source mutation cannot retarget the result | Matched. No token, profile, database or network operation occurs. |
+| Duplicate JSON members and HTTP authentication | Text/bytes are refused; a fixture explicitly demonstrates that a prior JSON parser loses duplicate-member evidence | Deferred to a future bounded resource-aware transport. This codec accepts parsed values and does not authenticate, select an endpoint or admit an HTTP/MCP request. |
+
+All **13 focused codec tests** and strict types pass on **Node 22.23.2 and
+24.19.0**. The immutable ignored source/log receipt is
+`delegated-identity-source-receipt.json`, SHA-256
+`f0a722c9fce3cbea0804d68c30478eb67ad5748aa1c53752868efe76ad6756ca`.
+Independent scoped review reports no remaining concrete finding. The existing
+21 HTTP tests, callback and API-key/native paths are unchanged.
+This closes the strict parsed-DTO conversion prerequisite only. A future owner
+must supply a fresh successful response from its explicitly trusted resource
+endpoint, reject duplicate JSON members and qualify response bounds/cleanup.
+No endpoint URL is guessed and no token egress, native store, command/browser
+activation, registry or deployment action occurs. Initial enrollment durability,
+abandoned-grant cleanup, real TLS/admission and native cross-process acceptance
+remain open; Platform login remains inactive.
