@@ -2,6 +2,7 @@ import { getApiKey, getApiUrl, assertInvocationActive, getInvocationSignal, capt
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { captureDelegatedRestInvocation, refuseDelegatedCompatibility, hasDelegatedInvocation, type DelegatedRestInvocation } from './delegated-invocation.js';
 
 interface ClientOptions {
   apiKey?: string;
@@ -42,6 +43,12 @@ export class BotaResponseError extends Error {
     super(status === undefined ? detail : `HTTP ${status}: ${detail}`);
     this.name = 'BotaResponseError';
   }
+}
+
+/** Commands retain canonical API-key profile origins. A delegated scope has a
+ * different exact-resource contract and refuses any explicitly supplied URL. */
+export function createCommandClient(apiUrlOverride?: string): BotaClient {
+  return new BotaClient({ apiUrl: hasDelegatedInvocation() ? apiUrlOverride : getApiUrl(apiUrlOverride) });
 }
 
 export const INTEGRATION_PROVIDERS = {
@@ -202,13 +209,16 @@ export class BotaApiError extends Error {
 }
 
 export class BotaClient {
-  private apiKey: string;
-  private apiUrl: string;
+  private apiKey: string | undefined;
+  private apiUrl: string | undefined;
+  private readonly delegated: DelegatedRestInvocation | undefined;
   private readonly signal: AbortSignal | undefined;
   private readonly assertAccess: () => void;
 
   constructor(opts: ClientOptions = {}) {
     this.assertAccess = captureInvocationAccess();
+    this.delegated = captureDelegatedRestInvocation(opts);
+    if (this.delegated) return;
     assertInvocationCredential(opts.apiUrl, opts.apiKey);
     this.signal = getInvocationSignal();
     this.apiKey = opts.apiKey ?? getApiKey();
@@ -218,6 +228,9 @@ export class BotaClient {
   private async request<T>(method: string, path: string, body?: unknown, params?: Record<string, string | number | undefined>): Promise<T> {
     this.assertAccess();
     if (this.signal?.aborted) throw new Error('The selected operation was cancelled.');
+    let res: Response;
+    if (this.delegated) res = await this.delegated.request(method, path, body, params);
+    else {
     let url = `${this.apiUrl}${path}`;
 
     if (params) {
@@ -229,7 +242,7 @@ export class BotaClient {
       if (str) url += `?${str}`;
     }
 
-    const res = await fetch(url, {
+    res = await fetch(url, {
       method,
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
@@ -240,6 +253,7 @@ export class BotaClient {
       credentials: 'omit',
       signal: this.signal ? AbortSignal.any([this.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     });
+    }
 
     try { this.assertAccess(); }
     catch (error) { try { await res.body?.cancel(); } catch { /* Preserve fixed access failure. */ } throw error; }
@@ -320,6 +334,8 @@ export class BotaClient {
 }
 
 export async function callMcpTool(apiUrl: string, apiKey: string, toolName: string, args: Record<string, unknown>): Promise<string> {
+  // Compatibility helper is not an MCP-resource delegated transport.
+  refuseDelegatedCompatibility();
   assertInvocationActive();
   assertInvocationCredential(apiUrl, apiKey);
   const assertAccess = captureInvocationAccess();

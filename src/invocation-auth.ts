@@ -4,6 +4,7 @@ import { runWithSecureProfile, inspectSecureProfile } from './secure-profiles.js
 import { NativeProfileTransactionError, type NativeProfileBinding, type NativeProfileSnapshot,
   type NativeResolvedCredential, type NativeOperationContext } from './native-profile-transaction.js';
 import type { SecureProfileOptions } from './secure-profiles.js';
+import { hasDelegatedInvocation, refuseDelegatedCompatibility } from './delegated-invocation.js';
 
 /** Explicit native selection wraps the complete action, including its cleanup.
  * There is no preAction/postAction lock handoff or saved default selection. */
@@ -11,6 +12,7 @@ export function withCommandAuth<Args extends unknown[], Result>(program: Command
   action: (...args: Args) => Result | Promise<Result>): (...args: Args) => Promise<Result> {
   return async (...args) => {
     const options = program.opts();
+    if (hasDelegatedInvocation() && options['secureProfile'] !== undefined) refuseDelegatedCompatibility();
     if (options['secureProfile'] === undefined) return action(...args);
     const controller = new AbortController();
     let interrupt: number | undefined;

@@ -371,3 +371,130 @@ not presented as secure enrollment.
 | Preserve explicit API-key compatibility | Key-argument enrollment, logout, identity/profile and complete CLI regression suites | Matched for tested source. No owner credential or canonical store is accessed by the new retirement tests. |
 | Source/package qualification | Both Node 24.19.0 and 22.23.2: 652 total, 649 pass, three expected platform skips; strict types; installed candidate verification and 182-package license check | Matched locally. Exact-source hosted checks and public package availability remain separate. |
 | Secure delegated enrollment/shared auth | No native initial-attempt journal, abandoned-grant recovery, native family provider or configured browser consent is enabled | Partial overall. Retirement closes an unsafe old path; it does not complete Platform login. |
+
+## Protected enrollment ordering and shared delegated consumers
+
+This private source increment adds an opt-in recoverable producer, first-response
+custody checkpoint, enrollment-attempt revocation client, MCP identity verifier
+and shared REST/MCP invocation assembly. It supplies no default deployment,
+native delegated journal/store, public login switch or migration from API keys.
+No-argument `auth login` remains unavailable. The existing canonical-host ACL
+refusal is retained; no permissions were repaired or alternate storage selected.
+
+The recoverable producer generates an independent attempt UUID and cleanup
+verifier in addition to PKCE/state. It retains the exact original deployment,
+selection, redirect and both proof secrets through an explicit trusted port
+before returning any authorization URL or accepting a callback. The URL carries
+only the attempt ID and independent S256 challenge. An exact matching positive
+acknowledgement is required; unknown or negative retention joins the listener
+and cooperative port and returns no attempt. This establishes source ordering,
+not actual protected OS persistence or crash durability.
+
+For a genuine recoverable attempt, code exchange requires a separate initial-
+refresh custody port before any token request. A well-formed first refresh is
+retained in the attempt namespace before resource identity verification, with
+claimed grant/family IDs treated as untrusted until verification. Access tokens
+stay transient. The custody child context retires immediately when that one
+operation joins; it cannot remain usable while a later identity check waits.
+Identity failure, cancellation or an uncertain receipt never adopts a family,
+deletes recovery proof or silently repeats code exchange.
+
+The existing configured revocation endpoint accepts an explicitly selected
+private Bota extension: the independent verifier, original PKCE proof, attempt
+ID and exact original client/redirect/resource bindings. Only a strict positive
+receipt matching that attempt and consistent derived grant/family IDs confirms
+cleanup. Empty RFC7009 success, lost response or malformed metadata stays
+unknown. The adapter does not remove custody; explicit recovery can repeat the
+same protective request. No current account call or issuance is required.
+
+The MCP verifier uses the CLI's pinned SDK 1.29.0 at the exact configured MCP
+resource and calls `get_delegated_identity`; it never falls back to REST or an
+API key. It admits a bounded JSON-response cohort, joins clients and native
+response work, rejects sessions/SSE/foreign resources/duplicate members, and
+checks authoritative identity expiry after cleanup. HTTPS production factories
+and explicitly mapped owned HTTP fixtures remain distinct.
+
+Shared invocation consumes the actual family engine rather than reclassifying
+a delegated bearer as a project key. Every action uses a freshly admitted exact
+resource under the same family lease and pinned user/org/project/grant/family/
+resource/scope binding. The actual BotaClient and existing resource commands
+can consume this separate private scope; the existing hosted bridge can use it
+through an explicitly supplied transport and request-auth function. API-key
+commands preserve canonical equivalent URL overrides. Delegated scopes refuse
+compatibility profile readers, explicit key/URL overrides, writes and unsupported
+reads before egress. This cohort permits bounded ordinary read IDs and query
+parameters, not every existing backend path. Ordinary responses are capped at
+1 MiB and fail closed without truncation; the identity transport cap is 16 KiB.
+The backend read-wire fixture separately admits a trusted 64 MiB cap. Large
+transcript/read compatibility and the deployed cap must be aligned deliberately
+before activation; this cohort does not establish unrestricted REST parity.
+
+Action settlement retires descendants and cancels/joins all started REST and
+MCP transport work before the actual lease releases. Pending REST work and
+uncertain native body cancellation/release prevent success even when an SDK
+background error is swallowed. The network child is separate from the engine's
+parent context, so ordinary cleanup does not falsely cancel a completed action.
+Expiry is checked after transport drain and again after the actual lease release.
+
+| Requirement | Evidence | Current conformance |
+| --- | --- | --- |
+| Retain cleanup proof before URL/callback publication | Genuine recoverable producer; exact/negative/unknown acknowledgements, held cancellation and actual owned-listener close assertions | Source ordering matched through a disclosed trusted retention port; native persistence remains unqualified. |
+| Retain first refresh before trusting identity | Exact acknowledgement/mismatch/privacy tests, held custody and identity failures, retired custody child while verifier waits | Source ordering matched; no native journal/adoption coordinator is activated. |
+| Pre-callback protective cleanup over existing HTTP | Strict original proof binding, exact seven-field POST, matching/null receipt cases and uncertainty tests | Client and backend source components qualify separately; controlled combined protocol has its own receipt. |
+| Separate exact REST/MCP audiences and current admission | Actual family engines, ordinary REST client/commands, SDK MCP verifier/bridge and wrong-scope/resource negatives | Private shared source cohort only; no default issuer, installed provider or deployed resource is enabled. |
+| Join cleanup before releasing authority | Held background work, cancellation rejection, unawaited REST, retired descendants and lease-release expiry regressions | Matched under cooperative owned ports; arbitrary uncooperative ports have no universal join guarantee. |
+| Preserve API-key compatibility | Complete CLI suite, canonical URL override regression and package candidate checks | Exact final results are recorded below; legacy flows are not converted into delegated sessions. |
+
+The first complete CLI run retained 719 total / 715 pass / one failure / three
+platform skips. Its negative-retention test reconnected a released numeric
+ephemeral port and could not identify the server owner. The specific failure's
+second owner was not recorded. The replacement observes the actual owned Node
+Server's close event, stopped state, null address and zero connections, and
+proves that a live owned listener fails that assertion. It uses neither a sleep
+nor a retry and changes no production close path.
+
+Independent review also found and fixed the API-key command canonicalization
+regression, unjoined started REST work, an overlong initial-custody child lifetime,
+missing post-drain expiry, swallowed MCP cleanup failures and missing expiry
+after actual lease release. New regressions cover each corrected behavior.
+
+Native delegated custody and cross-process/crash coordination, canonical-host
+acceptance, configured production issuer/client/mounts, actual browser/SSO/MFA,
+live TLS/ingress, installed CLI/MCP and independent hosted-client OAuth remain
+separate gates. These source increments do not make Platform login complete.
+
+Final full qualification passes on Node 24.19.0 and 22.23.2: **722 total,
+719 pass, three existing platform skips, zero failures** on each runtime,
+with strict types on both. The packed six-file candidate installs into a
+temporary consumer with lifecycle scripts disabled and passes package checks;
+the license gate checks 182 packages. All 5,133 declared source, test, dependency,
+control and runtime inputs remain byte-identical before/after qualification.
+Receipt `platform-login-cli-final-v3-receipt.json` SHA-256:
+`37204c0b9617feffd12cd5c6392f1f1cea7e5a81d58470279eb75f3a830ede3f`.
+
+The final run uses four file workers and unchanged per-test/request deadlines.
+An earlier v2 Node24 run passed, while Node22's unconstrained 40-file runner on
+this 16-processor host timed out in two tests that each launch five CLI/tsx
+processes, and subsequently hit the outer 240-second ceiling. That run remains
+failed; its exact cause is unproved. No Node22 descendants remained at the
+subsequent process inventory. Bounded concurrency is consistent with the
+observed startup load and does not relax the actual 30-second request deadline.
+The successful final run independently establishes its stated results, not
+retroactive success for that failed attempt. No production change was made for
+the v2 timeout.
+
+The focused producer cohort independently passes 45 checks on each runtime
+(29 existing and 16 recovery); receipt SHA-256
+`1fd2e9488b240ec7bce19b53ec892fe5b6562a76460fc93d7b2e7e8d3fc4b2de`.
+The full final suite additionally covers the 17 MCP-identity, nine initial-
+custody, eight enrollment-revocation and 20 shared-invocation cases against the
+final source graph. The earlier MCP component receipt is
+`5b68d5db55f5442bababb4b3b0623ff247cb4309fdacebd1ae35d11cb06179da`;
+its original imported graph is historical, while the full final receipt binds
+the combined current graph.
+
+The controlled cross-repository test found a genuine backend enrollment HTTP
+wrapper that still admitted only the legacy consent DTO and rejected the new
+optional authorization-request correlation ID. This CLI qualification does not
+resolve or establish that server composition; its narrow server correction and
+fresh actual HTTP/PostgreSQL protocol qualification have their own evidence.

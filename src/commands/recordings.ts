@@ -1,8 +1,7 @@
 import { withCommandAuth } from '../invocation-auth.js';
 import { Command } from 'commander';
-import { BotaClient } from '../client.js';
+import { createCommandClient } from '../client.js';
 import { printTable, printJson, printDetail, printPagination, handleCommandFailure, ok } from '../output.js';
-import { getApiKey, getApiUrl } from '../config.js';
 
 interface Recording {
   id: string;
@@ -58,7 +57,7 @@ export function registerRecordings(program: Command): void {
     .option('--end-date <iso>', 'Filter created_at before this ISO timestamp')
     .action(withCommandAuth(program, async (opts) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const res = await client.get<ListResponse>('/v1/recordings', {
           limit: opts.limit,
@@ -94,7 +93,7 @@ export function registerRecordings(program: Command): void {
     .description('Get recording by ID')
     .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const recording = await client.get<Recording>(`/v1/recordings/${id}`);
 
@@ -129,7 +128,7 @@ export function registerRecordings(program: Command): void {
     .option('--provider <p>', 'ASR provider (whisper, deepgram, assemblyai, elevenlabs)')
     .action(withCommandAuth(program, async (id: string, opts) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const txn = await client.post<Transcription>('/v1/transcriptions', {
           recording_id: id,
@@ -159,7 +158,7 @@ export function registerRecordings(program: Command): void {
         throw new Error('--prompt must contain 10–10000 characters');
       }
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const txnRes = await client.get<TranscriptionListResponse>('/v1/transcriptions', { recording_id: id });
         const txn = txnRes.data[0];

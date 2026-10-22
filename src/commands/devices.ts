@@ -1,8 +1,7 @@
 import { withCommandAuth } from '../invocation-auth.js';
 import { Command } from 'commander';
-import { BotaClient } from '../client.js';
+import { createCommandClient } from '../client.js';
 import { printTable, printJson, printDetail, printPagination, handleCommandFailure } from '../output.js';
-import { getApiKey, getApiUrl } from '../config.js';
 
 interface Device {
   id: string;
@@ -31,7 +30,7 @@ export function registerDevices(program: Command): void {
     .option('--end-user <eu_...>', 'Filter by end user ID')
     .action(withCommandAuth(program, async (opts) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const res = await client.get<ListResponse>('/v1/devices', {
           limit: opts.limit,
@@ -65,7 +64,7 @@ export function registerDevices(program: Command): void {
     .description('Get device by ID')
     .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const device = await client.get<Device>(`/v1/devices/${id}`);
         if (globalOpts['json']) {
@@ -83,7 +82,7 @@ export function registerDevices(program: Command): void {
     .description('Get fleet stats')
     .action(withCommandAuth(program, async () => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const stats = await client.get<Record<string, unknown>>('/v1/devices/stats');
         if (globalOpts['json']) {

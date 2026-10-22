@@ -10,6 +10,8 @@ import {
 import { getApiKey, getApiUrl, captureInvocationAccess } from '../config.js';
 import type { RequestAuth } from '../invocation-auth.js';
 import { NativeProfileTransactionError } from '../native-profile-transaction.js';
+import { captureDelegatedMcpInvocation } from '../delegated-invocation.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 const REQUEST_BUDGET_MS = 30_000;
 const UNKNOWN_OUTCOME = 'The outcome of a submitted operation may be unknown. Inspect its owning resource before retrying.';
@@ -31,6 +33,17 @@ function hostedUrl(apiUrl: string): URL {
 }
 
 export async function startHostedMcp(apiUrl?: string, apiKey?: string, authenticate?: RequestAuth): Promise<void> {
+  return serveHostedMcp(new StdioServerTransport(), apiUrl, apiKey, authenticate, true);
+}
+
+/** Trusted composition for an explicitly supplied local transport. This runs
+ * the same forward handlers and joined shutdown, without process/stdin owners. */
+export async function startHostedMcpWithTransport(transport: Transport, authenticate: RequestAuth): Promise<void> {
+  return serveHostedMcp(transport, undefined, undefined, authenticate, false);
+}
+
+async function serveHostedMcp(downstream: Transport, apiUrl: string | undefined, apiKey: string | undefined,
+  authenticate: RequestAuth | undefined, processOwned: boolean): Promise<void> {
   const startupUrl = authenticate ? undefined : hostedUrl(apiUrl!);
   const server = new Server({ name: 'bota-hosted-bridge', version: '0.1.0' }, { capabilities: { tools: {} } });
   const active = new Map<RequestId, AbortController>();
@@ -54,11 +67,13 @@ export async function startHostedMcp(apiUrl?: string, apiKey?: string, authentic
     const fetchCleanup: Array<() => void> = [];
     const scoped = async () => {
       const assertAccess = captureInvocationAccess();
+      const delegated = captureDelegatedMcpInvocation();
+      if (delegated && request.method === 'tools/call') delegated.authorizeTool(request.params.name);
       const upstream = new Client({ name: 'bota-hosted-bridge', version: '0.1.0' }, { capabilities: {} });
       upstream.onerror = () => undefined;
       try {
-        const transport = new StreamableHTTPClientTransport(startupUrl ?? hostedUrl(getApiUrl()), {
-          requestInit: { headers: { Authorization: `Bearer ${apiKey ?? getApiKey()}` }, redirect: 'error' },
+        const transport = new StreamableHTTPClientTransport(delegated ? new URL(delegated.url) : startupUrl ?? hostedUrl(getApiUrl()), {
+          requestInit: { headers: { Authorization: `Bearer ${delegated?.accessToken ?? apiKey ?? getApiKey()}` }, redirect: 'error' },
           reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 1000, maxReconnectionDelay: 1000, reconnectionDelayGrowFactor: 1 },
           fetch: (input, init) => {
             assertAccess();
@@ -73,7 +88,7 @@ export async function startHostedMcp(apiUrl?: string, apiKey?: string, authentic
             }
             // SDK GET requests have a separate init; retain cancellation through
             // response-body consumption, not just response headers.
-            return fetch(input, { ...init, redirect: 'error', credentials: 'omit', signal: fetchController.signal });
+            return (delegated?.fetch ?? fetch)(input, { ...init, redirect: 'error', credentials: 'omit', signal: fetchController.signal });
           },
         });
         const options = { signal: controller.signal, timeout: REQUEST_BUDGET_MS, maxTotalTimeout: REQUEST_BUDGET_MS };
@@ -117,12 +132,14 @@ export async function startHostedMcp(apiUrl?: string, apiKey?: string, authentic
     if (notification.params.requestId !== undefined) active.get(notification.params.requestId)?.abort();
   });
 
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
-  process.stdin.once('end', stop);
-  process.stdin.once('close', stop);
+  if (processOwned) {
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+    process.stdin.once('end', stop);
+    process.stdin.once('close', stop);
+  }
   try {
-    await server.connect(new StdioServerTransport());
+    await server.connect(downstream);
     await stopped;
   } finally {
     stopping = true;
@@ -130,10 +147,12 @@ export async function startHostedMcp(apiUrl?: string, apiKey?: string, authentic
     await closeHostedTransport(() => server.close(), async () => {
       try { await Promise.allSettled([...pending]); }
       finally {
-        process.removeListener('SIGINT', stop);
-        process.removeListener('SIGTERM', stop);
-        process.stdin.removeListener('end', stop);
-        process.stdin.removeListener('close', stop);
+        if (processOwned) {
+          process.removeListener('SIGINT', stop);
+          process.removeListener('SIGTERM', stop);
+          process.stdin.removeListener('end', stop);
+          process.stdin.removeListener('close', stop);
+        }
       }
     });
   }

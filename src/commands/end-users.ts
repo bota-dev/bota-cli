@@ -1,8 +1,7 @@
 import { withCommandAuth } from '../invocation-auth.js';
 import { Command } from 'commander';
-import { BotaClient } from '../client.js';
+import { createCommandClient } from '../client.js';
 import { printTable, printJson, printDetail, printPagination, handleCommandFailure, ok } from '../output.js';
-import { getApiKey, getApiUrl } from '../config.js';
 
 interface EndUser {
   id: string;
@@ -36,7 +35,7 @@ export function registerEndUsers(program: Command): void {
     .option('--external-id <id>', 'Filter by external ID')
     .action(withCommandAuth(program, async (opts) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const res = await client.get<ListResponse>('/v1/end-users', {
           limit: opts.limit,
@@ -62,7 +61,7 @@ export function registerEndUsers(program: Command): void {
     .description('Get end user by ID')
     .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const user = await client.get<EndUser>(`/v1/end-users/${id}`);
         if (globalOpts['json']) {
@@ -83,7 +82,7 @@ export function registerEndUsers(program: Command): void {
     .option('--external-id <id>', 'External ID')
     .action(withCommandAuth(program, async (opts) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const user = await client.post<EndUser>('/v1/end-users', {
           name: opts.name,
@@ -106,7 +105,7 @@ export function registerEndUsers(program: Command): void {
     .description('Issue a user token for an end user (replaces any existing token)')
     .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         const res = await client.post<TokenResponse>(`/v1/end-users/${id}/user-token`);
         if (globalOpts['json']) {
@@ -129,7 +128,7 @@ export function registerEndUsers(program: Command): void {
     .description('Revoke the user token for an end user')
     .action(withCommandAuth(program, async (id: string) => {
       const globalOpts = program.opts();
-      const client = new BotaClient({ apiKey: getApiKey(), apiUrl: getApiUrl(globalOpts['apiUrl'] as string | undefined) });
+      const client = createCommandClient(globalOpts['apiUrl'] as string | undefined);
       try {
         await client.delete(`/v1/end-users/${id}/user-token`);
         if (!globalOpts['json']) {

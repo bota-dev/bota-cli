@@ -2,10 +2,10 @@
  * is wired. Production and trusted fixture assembly are separate factories. */
 import { types } from 'node:util';
 import { performance } from 'node:perf_hooks';
-import { parseDelegatedLoginDeployment, readDelegatedLoginExchangeBinding,
+import { parseDelegatedLoginDeployment, readDelegatedLoginExchangeBinding, isRecoverableDelegatedLoginAttempt, readDelegatedLoginRecoveryBinding,
   type DelegatedLoginAttempt, type DelegatedLoginDeployment } from './delegated-login.js';
 import { delegatedFamilyIdentity, delegatedScopes, familyObject, familySeconds, familyServerUuid, familyStrings,
-  sameFamilySet } from './delegated-family-state.js';
+  sameFamilySet, familyUuid } from './delegated-family-state.js';
 import type { DelegatedFamilyContext, DelegatedRevocationBinding, DelegatedTokenPair, DelegatedVerifiedAccess } from './delegated-family-engine.js';
 
 export const DELEGATED_HTTP_LIMITS = Object.freeze({ timeoutMs: 30_000, maxBodyBytes: 16 * 1024, maxIssuedAccess: 128 });
@@ -33,6 +33,19 @@ export class DelegatedHttpError extends Error {
 function fail(code: Failure, submitted = false): never { throw new DelegatedHttpError(code, submitted); }
 export type DelegatedIdentityVerifier = (deployment: DelegatedLoginDeployment, accessToken: string,
   resource: string, context: DelegatedFamilyContext) => Promise<unknown>;
+export interface DelegatedInitialRefresh {
+  readonly attemptId: string; readonly refreshToken: string; readonly resource: string;
+  readonly grantId: string; readonly familyId: string; readonly scopes: readonly string[];
+}
+/** The initial-attempt namespace owns this secret before its claimed identity
+ * is trusted. Acknowledgement is not family enrollment or native qualification.
+ * Access tokens stay transient. The port must join its cooperative durable I/O. */
+export type DelegatedInitialRefreshCustody = (value: DelegatedInitialRefresh,
+  context: DelegatedFamilyContext) => Promise<unknown>;
+export interface DelegatedEnrollmentRevocationConfirmation {
+  readonly attemptId: string; readonly authorizationRequestId: string;
+  readonly grantId: string | null; readonly familyId: string | null;
+}
 export interface DelegatedHttpAdapter {
   readonly stage: 'inactive-one-attempt-http';
   exchangeCode(attempt: DelegatedLoginAttempt, context: DelegatedFamilyContext): Promise<DelegatedTokenPair>;
@@ -40,6 +53,8 @@ export interface DelegatedHttpAdapter {
   verifyAccess(deployment: DelegatedLoginDeployment, access: string, resource: string, context: DelegatedFamilyContext): Promise<DelegatedVerifiedAccess>;
   revoke(deployment: DelegatedLoginDeployment, refresh: string, expected: DelegatedRevocationBinding,
     context: DelegatedFamilyContext): Promise<DelegatedRevocationBinding | 'unknown' | 'not_submitted'>;
+  revokeEnrollmentAttempt(retainedBinding: unknown, context: DelegatedFamilyContext): Promise<
+    Readonly<DelegatedEnrollmentRevocationConfirmation> | 'unknown' | 'not_submitted'>;
 }
 export interface DelegatedHttpTrustedPorts {
   readonly fetch: typeof fetch;
@@ -51,6 +66,7 @@ export interface DelegatedHttpTrustedPorts {
   readonly verifyAccess: DelegatedIdentityVerifier;
   readonly nowSeconds?: () => number;
   readonly timeoutMs?: number;
+  readonly retainInitialRefresh?: DelegatedInitialRefreshCustody;
 }
 function secret(kind: 'access' | 'refresh' | 'code', value: unknown): value is string {
   const prefix = kind === 'access' ? 'bota_da1_' : kind === 'refresh' ? 'bota_dr1_' : 'bota_dc1_';
@@ -66,18 +82,24 @@ interface Access { readonly resource: string; readonly identity: DelegatedVerifi
 export function createDelegatedHttpAdapter(deployment: unknown, verifier: DelegatedIdentityVerifier): DelegatedHttpAdapter {
   return createDelegatedHttpAdapterForTrustedPorts(deployment, { fetch: nativeFetch, verifyAccess: verifier });
 }
+export function createRecoverableDelegatedHttpAdapter(deployment: unknown, verifier: DelegatedIdentityVerifier,
+  retainInitialRefresh: DelegatedInitialRefreshCustody): DelegatedHttpAdapter {
+  return createDelegatedHttpAdapterForTrustedPorts(deployment, { fetch: nativeFetch, verifyAccess: verifier, retainInitialRefresh });
+}
 /** Trusted internal fixture/adapter assembly only. A transport replacement is
  * not evidence of production TLS, identity admission or native qualification. */
 export function createDelegatedHttpAdapterForTrustedPorts(input: unknown, inputPorts: DelegatedHttpTrustedPorts): DelegatedHttpAdapter {
   let deployment: DelegatedLoginDeployment, transport: typeof fetch, verifier: DelegatedIdentityVerifier,
-    clock: () => number, timeoutMs: number;
+    clock: () => number, timeoutMs: number, retainInitialRefresh: DelegatedInitialRefreshCustody | undefined;
   try {
     deployment = parseDelegatedLoginDeployment(input);
-    const ports = familyObject(inputPorts, ['fetch', 'verifyAccess'], ['nowSeconds', 'timeoutMs']);
+    const ports = familyObject(inputPorts, ['fetch', 'verifyAccess'], ['nowSeconds', 'timeoutMs', 'retainInitialRefresh']);
     if (typeof ports.fetch !== 'function' || types.isProxy(ports.fetch) || typeof ports.verifyAccess !== 'function' || types.isProxy(ports.verifyAccess)
-      || ports.nowSeconds !== undefined && (typeof ports.nowSeconds !== 'function' || types.isProxy(ports.nowSeconds))) fail('http_configuration_invalid');
+      || ports.nowSeconds !== undefined && (typeof ports.nowSeconds !== 'function' || types.isProxy(ports.nowSeconds))
+      || ports.retainInitialRefresh !== undefined && (typeof ports.retainInitialRefresh !== 'function' || types.isProxy(ports.retainInitialRefresh))) fail('http_configuration_invalid');
     transport = ports.fetch as typeof fetch; verifier = ports.verifyAccess as DelegatedIdentityVerifier;
     clock = ports.nowSeconds as (() => number) | undefined ?? (() => Math.floor(Date.now() / 1000));
+    retainInitialRefresh = ports.retainInitialRefresh as DelegatedInitialRefreshCustody | undefined;
     timeoutMs = ports.timeoutMs as number | undefined ?? DELEGATED_HTTP_LIMITS.timeoutMs;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > DELEGATED_HTTP_LIMITS.timeoutMs) fail('http_configuration_invalid');
   } catch { return fail('http_configuration_invalid'); }
@@ -206,7 +228,7 @@ export function createDelegatedHttpAdapterForTrustedPorts(input: unknown, inputP
     if (issued.size >= DELEGATED_HTTP_LIMITS.maxIssuedAccess) issued.delete(issued.keys().next().value!);
     issued.set(pair.accessToken, Object.freeze({ resource: pair.resource, identity }));
   }
-  async function token(fields: URLSearchParams, selectedResource: string, scope: Scope): Promise<{ pair: DelegatedTokenPair; identity: DelegatedVerifiedAccess }> {
+  async function token(fields: URLSearchParams, selectedResource: string, scope: Scope, attemptId?: string): Promise<{ pair: DelegatedTokenPair; identity: DelegatedVerifiedAccess }> {
     const raw = await post(deployment.endpoints.token, fields, scope);
     const item = familyObject(raw, ['access_token', 'refresh_token', 'token_type', 'expires_in', 'resource', 'bota_grant_id', 'bota_family_id'], ['scope']);
     if (!secret('access', item.access_token) || !secret('refresh', item.refresh_token) || item.token_type !== 'Bearer'
@@ -216,6 +238,25 @@ export function createDelegatedHttpAdapterForTrustedPorts(input: unknown, inputP
     if (Object.hasOwn(item, 'scope')) {
       if (typeof item.scope !== 'string' || !item.scope || item.scope.split(' ').some(value => !value)) fail('http_unknown', true);
       scopes = familyStrings(item.scope.split(' '), delegatedScopes);
+    }
+    if (attemptId !== undefined) {
+      scope.check();
+      // Preserve the first received refresh credential BEFORE account/identity
+      // verification or handoff. Claimed grant/family IDs cannot select a ready
+      // family or replace the original attempt's cleanup proof.
+      const value: DelegatedInitialRefresh = Object.freeze({ attemptId, refreshToken: item.refresh_token,
+        resource: selectedResource, grantId: item.bota_grant_id, familyId: item.bota_family_id, scopes: Object.freeze([...scopes]) });
+      const controller = new AbortController(); let active = true;
+      const stop = () => controller.abort();
+      const assertActive = () => { scope.check(); if (!active || aborted.call(controller.signal)) fail('http_unknown', true); };
+      const context = Object.freeze({ signal: controller.signal, budget: Object.freeze({ assertActive }) });
+      listen.call(scope.context.signal, 'abort', stop, { once: true }); if (aborted.call(scope.context.signal)) stop();
+      try {
+        assertActive();
+        const receipt = familyObject(await retainInitialRefresh!(value, context), ['status', 'attemptId', 'grantId', 'familyId']);
+        assertActive();
+        if (receipt.status !== 'retained' || receipt.attemptId !== attemptId || receipt.grantId !== value.grantId || receipt.familyId !== value.familyId) fail('http_unknown', true);
+      } finally { active = false; controller.abort(); unlisten.call(scope.context.signal, 'abort', stop); }
     }
     const identity = await verify(item.access_token, selectedResource, scope);
     if (identity.grantId !== item.bota_grant_id || identity.familyId !== item.bota_family_id || !sameFamilySet(identity.accessScopes, scopes)) fail('http_identity_failed', true);
@@ -229,13 +270,15 @@ export function createDelegatedHttpAdapterForTrustedPorts(input: unknown, inputP
     async exchangeCode(attempt: DelegatedLoginAttempt, context: DelegatedFamilyContext) {
       return operation(context, async scope => {
         const binding = readDelegatedLoginExchangeBinding(attempt);
+        const recoverable = isRecoverableDelegatedLoginAttempt(attempt);
         if (binding.issuer !== deployment.issuer || binding.tokenEndpoint !== deployment.endpoints.token || binding.clientId !== deployment.client.clientId
-          || consumedAttempts.has(attempt)) fail('http_input_invalid');
+          || consumedAttempts.has(attempt) || recoverable && !retainInitialRefresh) fail('http_input_invalid');
+        const recovery = recoverable ? readDelegatedLoginRecoveryBinding(attempt) : undefined;
         resource(binding.resource); consumedAttempts.add(attempt);
         const result = familyObject(await attempt.result, ['code']); scope.check(); readDelegatedLoginExchangeBinding(attempt);
         if (!secret('code', result.code)) fail('http_input_invalid');
         const obtained = await token(new URLSearchParams({ grant_type: 'authorization_code', client_id: deployment.client.clientId,
-          code: result.code, redirect_uri: binding.redirectUri, code_verifier: binding.verifier, resource: binding.resource }), binding.resource, scope);
+          code: result.code, redirect_uri: binding.redirectUri, code_verifier: binding.verifier, resource: binding.resource }), binding.resource, scope, recovery?.attemptId);
         if (obtained.identity.grantResourceUris.some(value => !binding.grantResources.includes(value))
           || obtained.identity.grantScopes.some(value => !(binding.scopes as readonly string[]).includes(value))) fail('http_identity_failed', true);
         readDelegatedLoginExchangeBinding(attempt); return obtained;
@@ -269,6 +312,38 @@ export function createDelegatedHttpAdapterForTrustedPorts(input: unknown, inputP
           return Object.freeze({ grantId: expected.grantId, familyId: expected.familyId });
         });
       } catch (error) { const known = error && typeof error === 'object' ? failures.get(error) : undefined; return known?.mutationSubmitted ? 'unknown' : 'not_submitted'; }
+    },
+    async revokeEnrollmentAttempt(retainedBinding: unknown, context: DelegatedFamilyContext) {
+      try {
+        return await operation(context, async scope => {
+          const binding = familyObject(retainedBinding, ['attemptId', 'recoveryVerifier', 'pkceVerifier', 'issuer', 'clientId', 'redirectUri', 'resource', 'grantResources', 'scopes']);
+          const verifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value)
+            && Buffer.from(value, 'base64url').toString('base64url') === value;
+          if (!familyUuid(binding.attemptId) || !verifier(binding.recoveryVerifier) || !verifier(binding.pkceVerifier)
+            || binding.recoveryVerifier === binding.pkceVerifier || binding.issuer !== deployment.issuer || binding.clientId !== deployment.client.clientId
+            || typeof binding.redirectUri !== 'string') fail('http_input_invalid');
+          const redirect = /^http:\/\/(127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})\/oauth\/callback$/.exec(binding.redirectUri);
+          if (!redirect || Number(redirect[2]) > 65535 || !deployment.client.redirectUris.includes(`http://${redirect[1]}/oauth/callback`)) fail('http_input_invalid');
+          resource(binding.resource);
+          const grants = familyStrings(binding.grantResources, Object.values(deployment.resources), 1);
+          familyStrings(binding.scopes, delegatedScopes);
+          if (!grants.includes(binding.resource)) fail('http_input_invalid');
+          const raw = await post(deployment.endpoints.revocation, new URLSearchParams({ token_type_hint: 'bota_enrollment_attempt',
+            token: binding.recoveryVerifier, bota_enrollment_attempt: binding.attemptId, code_verifier: binding.pkceVerifier,
+            client_id: binding.clientId, redirect_uri: binding.redirectUri, resource: binding.resource }), scope, true);
+          // Unsupported/ordinary RFC7009 empty success is not proof of cleanup.
+          if (raw === undefined) return 'unknown' as const;
+          const receipt = familyObject(raw, ['bota_enrollment_revoked', 'bota_enrollment_attempt', 'bota_authorization_request_id', 'bota_grant_id', 'bota_family_id']);
+          if (receipt.bota_enrollment_revoked !== true || receipt.bota_enrollment_attempt !== binding.attemptId
+            || !familyServerUuid(receipt.bota_authorization_request_id)
+            || receipt.bota_grant_id !== null && !familyServerUuid(receipt.bota_grant_id)
+            || receipt.bota_family_id !== null && !familyServerUuid(receipt.bota_family_id)
+            || receipt.bota_grant_id === null && receipt.bota_family_id !== null) fail('http_unknown', true);
+          return Object.freeze({ attemptId: binding.attemptId, authorizationRequestId: receipt.bota_authorization_request_id,
+            grantId: receipt.bota_grant_id as string | null, familyId: receipt.bota_family_id as string | null });
+        });
+      } catch (error) { const known = error && typeof error === 'object' && !types.isProxy(error) ? failures.get(error) : undefined;
+        return known?.mutationSubmitted ? 'unknown' : 'not_submitted'; }
     },
   });
 }

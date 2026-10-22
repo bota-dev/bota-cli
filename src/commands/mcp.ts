@@ -10,6 +10,7 @@ import { registerIntegrationMcpTools } from './integration-mcp.js';
 import { startHostedMcp } from './hosted-mcp.js';
 import { createMcpRequestAuth, type RequestAuth } from '../invocation-auth.js';
 import { installMcpRequestAuth } from '../mcp-request-auth.js';
+import { refuseDelegatedCompatibility } from '../delegated-invocation.js';
 
 function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -49,7 +50,8 @@ export function registerMcp(program: Command, ports: McpCommandPorts = { createR
       };
 
       const server = new McpServer({ name: 'bota', version: '0.1.0' });
-      const requestAuth = authenticate ? installMcpRequestAuth(server.server, authenticate) : undefined;
+      const requestAuth = authenticate ? installMcpRequestAuth(server.server,
+        (signal, action) => authenticate(signal, async () => { refuseDelegatedCompatibility(); return action(); })) : undefined;
       registerIntegrationMcpTools(server, apiUrl, apiKey);
 
       server.registerTool(

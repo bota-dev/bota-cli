@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
@@ -57,6 +57,29 @@ export interface DelegatedLoginExchangeBinding {
   readonly scopes: readonly Scope[];
   readonly redirectUri: string;
   readonly verifier: string;
+}
+/** Secret recovery input for trusted retention/explicit protective cleanup only.
+ * It is never status, callback output, ordinary metadata or exchange authority. */
+export interface DelegatedLoginRecoveryBinding {
+  readonly attemptId: string;
+  readonly recoveryVerifier: string;
+  readonly pkceVerifier: string;
+  readonly issuer: string;
+  readonly clientId: string;
+  readonly redirectUri: string;
+  readonly resource: string;
+  readonly grantResources: readonly string[];
+  readonly scopes: readonly Scope[];
+}
+export interface DelegatedLoginRetentionContext {
+  readonly signal: AbortSignal;
+  readonly budget: { assertActive(): void };
+}
+export interface DelegatedLoginRetentionPort {
+  /** A positive matching receipt promises the exact whole input is protected
+   * and retained. This trusted seam does not itself qualify native persistence. */
+  retain(binding: DelegatedLoginRecoveryBinding, context: DelegatedLoginRetentionContext): Promise<
+    Readonly<{ status: 'retained'; attemptId: string }> | 'not_retained' | 'unknown'>;
 }
 
 // Snapshot own data only, before traversing input. No getters, proxies, coercion
@@ -145,19 +168,31 @@ function attemptOptions(input: unknown): { signal?: AbortSignal; timeoutMs: numb
   const timeoutMs = rawTimeout === undefined ? DELEGATED_LOGIN_LIMITS.defaultTimeoutMs : rawTimeout;
   const signal = descriptors.signal?.value;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > DELEGATED_LOGIN_LIMITS.maxTimeoutMs
-    || signal !== undefined && (types.isProxy(signal) || !(signal instanceof AbortSignal))) fail();
+    || signal !== undefined && types.isProxy(signal)) fail();
   if (signal) { try { signalAborted.call(signal); } catch { return fail(); } }
   return { timeoutMs, signal };
 }
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!;
+const abortChild = AbortController.prototype.abort;
+const invoke = Reflect.apply;
 
 const bindings = new WeakMap<DelegatedLoginAttempt, () => DelegatedLoginExchangeBinding>();
+const recoveryBindings = new WeakMap<DelegatedLoginAttempt, DelegatedLoginRecoveryBinding>();
+/** Genuine handle classification only; do not infer recovery from URL fields. */
+export function isRecoverableDelegatedLoginAttempt(attempt: unknown): boolean {
+  return recoveryBindings.has(attempt as DelegatedLoginAttempt);
+}
 /** A trusted owned handle, after successful joined callback capture only. This
  * snapshot is exchange input, not identity or grant authority. Never log it. */
 export function readDelegatedLoginExchangeBinding(attempt: DelegatedLoginAttempt): DelegatedLoginExchangeBinding {
   const read = bindings.get(attempt);
   if (!read) fail('login_not_complete');
   return read();
+}
+/** Intentionally survives cancellation/expiry: explicit cleanup must remain
+ * possible after callback loss. It does not permit exchange or reactivate login. */
+export function readDelegatedLoginRecoveryBinding(attempt: DelegatedLoginAttempt): DelegatedLoginRecoveryBinding {
+  const binding = recoveryBindings.get(attempt); if (!binding) fail('login_not_complete'); return binding;
 }
 
 type Callback = { kind: 'invalid' } | { kind: 'code'; code: string } | { kind: 'denied' };
@@ -206,11 +241,26 @@ function respond(response: ServerResponse, status: number, accepted = false, don
  * success/failure settlement follows joined server and owned socket closure. */
 export async function startDelegatedLoginAttempt(deploymentInput: unknown, selectionInput: unknown,
   options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<DelegatedLoginAttempt> {
+  return startAttempt(deploymentInput, selectionInput, options);
+}
+/** Explicit retained-attempt producer. No authorization URL or handle is
+ * published before a definitive matching trusted retention acknowledgement. */
+export async function startRecoverableDelegatedLoginAttempt(deploymentInput: unknown, selectionInput: unknown,
+  retentionPort: DelegatedLoginRetentionPort, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<DelegatedLoginAttempt> {
+  let retain: DelegatedLoginRetentionPort['retain'];
+  try { const fields = record(retentionPort, ['retain']);
+    if (typeof fields.retain !== 'function' || types.isProxy(fields.retain)) fail(); retain = fields.retain as DelegatedLoginRetentionPort['retain']; }
+  catch { return fail(); }
+  return startAttempt(deploymentInput, selectionInput, options, (binding, context) => invoke(retain, retentionPort, [binding, context]));
+}
+async function startAttempt(deploymentInput: unknown, selectionInput: unknown,
+  options: { signal?: AbortSignal; timeoutMs?: number }, retain?: DelegatedLoginRetentionPort['retain']): Promise<DelegatedLoginAttempt> {
   const deployment = parseDelegatedLoginDeployment(deploymentInput), chosen = selection(selectionInput, deployment);
   const { signal, timeoutMs } = attemptOptions(options), deadline = performance.now() + timeoutMs;
   if (signal && signalAborted.call(signal)) fail('login_cancelled');
-  let state: string, verifier: string, challenge: string;
-  try { state = entropy(); verifier = entropy(); challenge = createHash('sha256').update(verifier, 'ascii').digest('base64url'); }
+  let state: string, verifier: string, challenge: string, recoveryVerifier: string | undefined, attemptId: string | undefined;
+  try { state = entropy(); verifier = entropy(); challenge = createHash('sha256').update(verifier, 'ascii').digest('base64url');
+    if (retain) { attemptId = randomUUID(); recoveryVerifier = entropy(); if (recoveryVerifier === verifier || recoveryVerifier === state) fail('login_unavailable'); } }
   catch { return fail('login_unavailable'); }
   const sockets = new Map<Socket, Promise<void>>();
   let totalConnections = 0, requests = 0, claimed = false, outcome: { code: string } | DelegatedLoginError | undefined;
@@ -219,14 +269,15 @@ export async function startDelegatedLoginAttempt(deploymentInput: unknown, selec
   void result.catch(() => undefined); // The caller receives the original promise after bind.
   let ready!: () => void;
   const listenSettled = new Promise<void>(resolve => { ready = resolve; });
-  let closing: Promise<void> | undefined, completed = false, cancelled = false, authority = '', redirectUri = '';
+  let closing: Promise<void> | undefined, completed = false, cancelled = false, authority = '', redirectUri = '', retained = !retain;
+  const retentionController = retain ? new AbortController() : undefined;
   const currentFailure = (): DelegatedLoginError | undefined => cancelled || signal && signalAborted.call(signal) ? new DelegatedLoginError('login_cancelled')
     : performance.now() >= deadline ? new DelegatedLoginError('login_deadline') : undefined;
   const server = createServer({ maxHeaderSize: DELEGATED_LOGIN_LIMITS.maxHeaderBytes }, (request, response) => {
     response.on('error', () => undefined);
     requests++;
     const parsed = callback(request, authority, state);
-    if (outcome || claimed || currentFailure() || requests > DELEGATED_LOGIN_LIMITS.maxRequests) {
+    if (!retained || outcome || claimed || currentFailure() || requests > DELEGATED_LOGIN_LIMITS.maxRequests) {
       respond(response, 400, false, () => { if (requests > DELEGATED_LOGIN_LIMITS.maxRequests) finish(new DelegatedLoginError('login_callback_invalid')); });
       return;
     }
@@ -262,6 +313,7 @@ export async function startDelegatedLoginAttempt(deploymentInput: unknown, selec
   function finish(selected: { code: string } | DelegatedLoginError): void {
     if (outcome) return;
     outcome = currentFailure() ?? selected;
+    if (retentionController) abortChild.call(retentionController);
     closing = (async () => {
       await listenSettled;
       const closed = new Promise<void>(resolve => {
@@ -297,16 +349,49 @@ export async function startDelegatedLoginAttempt(deploymentInput: unknown, selec
   authorizationUrl.searchParams.set('redirect_uri', redirectUri); authorizationUrl.searchParams.set('state', state);
   authorizationUrl.searchParams.set('code_challenge', challenge);
   authorizationUrl.searchParams.set('code_challenge_method', 'S256');
+  if (attemptId && recoveryVerifier) {
+    authorizationUrl.searchParams.set('enrollment_attempt', attemptId);
+    authorizationUrl.searchParams.set('recovery_challenge', createHash('sha256').update(recoveryVerifier, 'ascii').digest('base64url'));
+    authorizationUrl.searchParams.set('recovery_challenge_method', 'S256');
+  }
   for (const kind of chosen.grantResourceKinds) authorizationUrl.searchParams.append('resource', deployment.resources[kind]);
   if (chosen.scopes.length) authorizationUrl.searchParams.set('scope', chosen.scopes.join(' '));
   const binding = Object.freeze({ issuer: deployment.issuer, tokenEndpoint: deployment.endpoints.token, clientId: deployment.client.clientId,
     resource: deployment.resources[chosen.resourceKind], grantResources: Object.freeze(chosen.grantResourceKinds.map(kind => deployment.resources[kind])),
     scopes: chosen.scopes, redirectUri, verifier });
+  let recoveryBinding: DelegatedLoginRecoveryBinding | undefined;
+  if (retain && retentionController && attemptId && recoveryVerifier) {
+    recoveryBinding = Object.freeze({ attemptId, recoveryVerifier, pkceVerifier: verifier, issuer: deployment.issuer, clientId: deployment.client.clientId,
+      redirectUri, resource: binding.resource, grantResources: binding.grantResources, scopes: binding.scopes });
+    let active = true, failed = false, acknowledgement: Readonly<{ status: 'retained'; attemptId: string }> | undefined;
+    const assertActive = () => {
+      const failure = currentFailure();
+      if (failure) throw failure;
+      if (!active || outcome || signalAborted.call(retentionController.signal)) fail('login_unavailable');
+    };
+    const context: DelegatedLoginRetentionContext = Object.freeze({ signal: retentionController.signal, budget: Object.freeze({ assertActive }) });
+    try {
+      assertActive();
+      // Join the supported retention producer directly. Cancellation closes the
+      // listener and withdraws child authority, but never detaches its work.
+      const receipt = await retain(recoveryBinding, context); assertActive();
+      const acknowledged = record(receipt, ['status', 'attemptId']);
+      if (acknowledged.status !== 'retained' || acknowledged.attemptId !== attemptId) fail('login_unavailable');
+      acknowledgement = Object.freeze({ status: 'retained' as const, attemptId: acknowledged.attemptId as string });
+    } catch { failed = true; }
+    finally { active = false; abortChild.call(retentionController); }
+    const failure = currentFailure();
+    if (failed || !acknowledgement || failure || outcome) {
+      const selected = failure ?? new DelegatedLoginError('login_unavailable'); finish(selected); await closing; return fail(selected.code);
+    }
+    retained = true;
+  }
   const attempt: DelegatedLoginAttempt = Object.freeze({ stage: DELEGATED_LOGIN_STAGE, authorizationUrl: authorizationUrl.href, redirectUri, result,
     cancel: async () => { cancelled = true; finish(new DelegatedLoginError('login_cancelled')); await closing; } });
   bindings.set(attempt, () => {
     if (!completed || !outcome || outcome instanceof DelegatedLoginError || currentFailure()) fail('login_not_complete');
     return binding;
   });
+  if (recoveryBinding) recoveryBindings.set(attempt, recoveryBinding);
   return attempt;
 }

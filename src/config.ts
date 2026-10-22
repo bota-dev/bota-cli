@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ProjectIdentity } from './client.js';
 import { NativeProfileTransactionError, type NativeOperationContext, type NativeResolvedCredential } from './native-profile-transaction.js';
+import { hasDelegatedInvocation, refuseDelegatedCompatibility, assertDelegatedInvocationActive, captureDelegatedInvocationAccess } from './delegated-invocation.js';
 
 const CONFIG_DIR = join(homedir(), '.bota');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
@@ -33,8 +34,9 @@ export async function withInvocationCredential<T>(credential: NativeResolvedCred
   finally { scope.active = false; }
 }
 
-export function isSecureInvocation(): boolean { return invocation.getStore() !== undefined; }
+export function isSecureInvocation(): boolean { return invocation.getStore() !== undefined || hasDelegatedInvocation(); }
 export function assertInvocationActive(): void {
+  assertDelegatedInvocationActive();
   const scope = invocation.getStore();
   if (!scope) return;
   if (!scope.active) throw new NativeProfileTransactionError('profile_operation_failed', false, true);
@@ -47,7 +49,9 @@ export function getInvocationSignal(): AbortSignal | undefined { assertInvocatio
  * callback, including caller-owned contexts whose signal remains un-aborted. */
 export function captureInvocationAccess(): () => void {
   const expected = invocation.getStore();
+  const delegated = captureDelegatedInvocationAccess();
   return () => {
+    delegated();
     if (invocation.getStore() !== expected) throw new NativeProfileTransactionError('profile_binding_mismatch');
     assertInvocationActive();
   };
@@ -64,6 +68,7 @@ export function setProfileContext(context: ProfileContext): void {
 }
 
 export function getProfileContext(): Readonly<ProfileContext> | undefined {
+  refuseDelegatedCompatibility();
   assertInvocationActive();
   if (invocation.getStore()) return invocation.getStore()!.profile;
   return profileContext;
