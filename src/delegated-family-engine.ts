@@ -55,6 +55,20 @@ export interface DelegatedFamilyPorts {
   newId?(): string;
 }
 export interface DelegatedEnrollmentHandoff { readonly stage: 'trusted-definitive-exchange-handoff' }
+export interface DelegatedConfirmedRevocationHandoff { readonly stage: 'trusted-enrollment-revocation-handoff' }
+const revocationHandoffs = new WeakMap<DelegatedConfirmedRevocationHandoff, {
+  deployment: DelegatedLoginDeployment; attemptId: string;
+  confirm: (context: DelegatedFamilyContext) => Promise<unknown>; used: boolean;
+}>();
+/** Private trusted transport composition only. The callback must return the
+ * definite original-attempt revocation result, never manufacture authority
+ * from IDs. It executes once inside the canonical family lease. */
+export function createTrustedDelegatedRevocationHandoff(deployment: unknown, attemptId: string,
+  confirm: (context: DelegatedFamilyContext) => Promise<unknown>): DelegatedConfirmedRevocationHandoff {
+  if (!familyUuid(attemptId) || typeof confirm !== 'function' || types.isProxy(confirm)) return familyFail('invalid_input');
+  const checked = parseDelegatedLoginDeployment(deployment), handle = Object.freeze({ stage: 'trusted-enrollment-revocation-handoff' as const });
+  revocationHandoffs.set(handle, { deployment: checked, attemptId, confirm, used: false }); return handle;
+}
 const handoffs = new WeakMap<DelegatedEnrollmentHandoff, { deployment: DelegatedLoginDeployment; receive: (context: DelegatedFamilyContext) => Promise<unknown>; used: boolean }>();
 /** TRUSTED TRANSPORT ASSEMBLY ONLY. Receive must deliver a definitively received
  * first code-exchange pair, never perform/retry an exchange on consumption.
@@ -376,6 +390,34 @@ export class DelegatedFamilyEngine {
   }
   async recoverRevocation(key: DelegatedFamilyKey, context: DelegatedFamilyContext): Promise<DelegatedFamilySnapshot> {
     return this.operation(context, context => this.leased(key, context, async (key, scope) => this.revokeLocked(key, await this.required(key, scope), scope, true)));
+  }
+  /** Recover an enrollment crash even when no local refresh was written. Only
+   * the one-use trusted proof-result handoff can replace reading a refresh. */
+  async acceptConfirmedRevocation(key: DelegatedFamilyKey, handoff: DelegatedConfirmedRevocationHandoff,
+    context: DelegatedFamilyContext): Promise<DelegatedFamilySnapshot> {
+    return this.operation(context, context => this.leased(key, context, async (key, scope) => {
+      const entry = handoff && typeof handoff === 'object' && !types.isProxy(handoff) ? revocationHandoffs.get(handoff) : undefined;
+      if (!entry || entry.used) return familyFail('invalid_input'); entry.used = true;
+      let state = await this.required(key, scope);
+      if (JSON.stringify(state.deployment) !== JSON.stringify(entry.deployment)) return familyFail('binding_mismatch');
+      if (state.state === 'removed' || state.state === 'removing' || state.state === 'revoked') return state;
+      if (state.state !== 'revoking') {
+        const cleanup = [...state.cleanup], candidate = state.intent?.candidate;
+        if (candidate && !familyReferences({ ...state, intent: null }).some(ref => sameRefreshReference(ref, candidate))) cleanup.push(candidate);
+        state = await this.publish(key, state, this.next(state, { state: 'revoking', cleanup,
+          intent: { transactionId: this.id(state), operation: 'revoke', resource: null, candidate: null } }), scope);
+      }
+      let receipt: unknown;
+      scope.assertActive(); this.markEffect(scope.context);
+      try { receipt = await entry.confirm(scope.context); } catch { return familyFail('revocation_unknown', true); }
+      scope.assertActive();
+      try {
+        const value = familyObject(receipt, ['attemptId', 'authorizationRequestId', 'grantId', 'familyId']);
+        if (value.attemptId !== entry.attemptId || !familyServerUuid(value.authorizationRequestId)
+          || value.grantId !== state.binding.grantId || value.familyId !== state.binding.familyId) return familyFail();
+      } catch { return familyFail('revocation_unknown', true); }
+      return this.publish(key, state, this.next(state, { state: 'revoked', intent: null }), scope);
+    }));
   }
   private async removeLocked(key: DelegatedFamilyKey, state: DelegatedFamilySnapshot, scope: Scope, recovery: boolean): Promise<DelegatedFamilySnapshot> {
     if (state.state === 'removed') return state;

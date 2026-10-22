@@ -12,6 +12,7 @@ import type { RequestAuth } from '../invocation-auth.js';
 import { NativeProfileTransactionError } from '../native-profile-transaction.js';
 import { captureDelegatedMcpInvocation } from '../delegated-invocation.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { developerProfileFailure } from '../developer-profile-error.js';
 
 const REQUEST_BUDGET_MS = 30_000;
 const UNKNOWN_OUTCOME = 'The outcome of a submitted operation may be unknown. Inspect its owning resource before retrying.';
@@ -109,6 +110,9 @@ async function serveHostedMcp(downstream: Transport, apiUrl: string | undefined,
     const operation = (async () => {
       try { return await (authenticate ? authenticate(controller.signal, scoped) : scoped()); }
       catch (error) {
+        const developer = developerProfileFailure(error);
+        if (developer) throw new McpError(ErrorCode.InternalError, developer.message, { code: developer.code,
+          recovery_required: developer.recovery_required, operation_may_have_executed: developer.operation_may_have_executed });
         if (error instanceof NativeProfileTransactionError) throw new McpError(ErrorCode.InternalError, error.message,
           { code: error.code, recovery_required: error.recovery_required, operation_may_have_executed: error.operation_may_have_executed });
         throw error;

@@ -549,3 +549,198 @@ case deadline while other source work ran. No assertion failed. Its isolated
 This does not retroactively pass the cancelled broad run. The foundation is
 qualified by the focused primitive suites and strict module types; final combined
 CLI/native/provider source, package and broader qualification remain separate.
+
+## October 22 native enrollment and refresh-family custody source
+
+The new delegated-only coordinator uses the previously qualified closed Profile
+root, credential kinds and guarded SQLite pair. It does not adopt API-key
+references or change their canonical location. The protected SQLite database
+stores only exact deployment/binding metadata, revisions, states and credential
+references. Independent cleanup/PKCE verifiers and refresh credentials use
+create-only exact Credential Manager references; access tokens stay transient.
+
+A named reservation is create-only and remains reserved through interruption.
+Only an explicit empty-reservation abandonment can produce its removed
+tombstone. Before acknowledging retention, the coordinator publishes proof or
+first-refresh intent, creates the typed credential, checks exact readback, and
+commits the completed metadata. Unknown storage or CAS acknowledgement keeps the
+exact intent/references and withholds success. Names and removed tombstones are
+never silently reused.
+
+The unchanged family engine consumes the native family snapshot/store/lease
+ports. A canonical store/issuer/client/server-family hash selects one ticket
+across resources and aliases; the genuine namespace lease additionally
+serializes the whole delegated store. No copied metadata/reference authorizes a
+credential operation outside its active ticket. Native admission is checked
+around every port and again after lease release. Owned callbacks join before
+close, children retire, and cleanup uncertainty prevents a success result.
+
+Adoption requires the exact ready generation-zero family, verified binding and
+retained first-refresh equality. A durable adopting record pins its family
+revision before attempt-secret cleanup. Explicit local recovery can resume that
+cleanup without exchanging a code or inventing another response. Named ready
+selection is published only after cleanup completes. A separate pending family
+key is cleanup material and never admission authority.
+
+A missing-refresh enrollment crash has a narrow one-use trusted revocation
+handoff. Its transport callback runs inside the canonical family lease, after a
+durable revoking intent. Only an exact original-attempt/request/grant/family
+confirmation advances to revoked; empty, lost, mismatched or cancelled results
+stay blocked with all references retained. Existing engine removal then proves
+exact credential absence. Native attempt cleanup requires its own matching
+receipt and a terminal related family. Interrupted proof/initial removal resumes
+only from the protected saved receipt; it does not reacquire browser authority
+or repeat exchange. Family logout separately tombstones the selected profile.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| Separate protected formats and nonsecret snapshots | Closed reference/codec negatives; actual SQLite bytes exclude all fixture secrets; API-key sentinel preserved | Source matched under explicit synthetic credential/lease ports |
+| Durable pre-effect intent and exact acknowledgements | Actual SQLite proof/refresh intent, create-only readback, unknown-write and post-COMMIT lost-ack cases | Source ordering matched; genuine native persistence is a separate instrument |
+| Restart and storage recovery | Fresh runtime reopen, ticket-scoped CAS, retained unknown schema and actual killed uncommitted SQLite writer/hot-journal recovery | Actual pinned SQLite matched in fresh owned fixture files; no canonical database was killed |
+| Family lease and reference authority | Actual engine enrollment/removal, cross-resource key shape, stale ticket/refusal and retired context cases | Source matched; a mock mutex does not prove Windows cross-process exclusion |
+| Enrollment crash, suspension and exact cleanup | Missing-refresh crash; one-use receipt handoff; lost/empty receipt leaves revoking; interrupted proof/initial cleanup; empty reservation abandonment | Source matched with explicitly synthetic remote confirmation |
+| Complete native or Platform login acceptance | Prepared canonical and controlled HTTP/PostgreSQL instruments | Unverified by this receipt; no real credential operation was executed by this source cohort |
+
+Focused qualification passes **77 total / 76 pass / one expected skip** on each
+of Node 24.19.0 and 22.23.2. The 35 new custody/SQLite cases and 41 existing family
+cases execute; the genuine unsupported-host refusal case skips on this supported
+Windows cohort. Actual Windows SQLite cases explicitly skip on unsupported
+OS/runtime; four native-free cases remain portable. No Ubuntu execution is
+inferred. Strict module types
+pass on both. The receipt is `delegated-native-final-v2-receipt.json`, SHA-256
+`d886394e1f310eb16b18f8a3c7bec7baa78d46b06bf57340fff0a72531f753bd`.
+It binds 20 actual TypeScript source-graph files, the two tests, configuration,
+both runtimes, the helper and all 5,034 installed dependency files before/after.
+Earlier failed development runs remain historical; test fixture fixes did not
+relax production authority or storage checks.
+
+The canonical instrument remains preparation at this checkpoint. Genuine
+Credential Manager durability, canonical reopen/process contention, configured
+production consent/issuer/current-account lifecycle, actual browser/SSO/MFA,
+TLS ingress, installed commands and live Platform acceptance require their own
+receipts. The controlled source cohort does not complete those gates.
+
+## October 22 explicit protected developer profile orchestration
+
+Authoritative requirements: Developer Toolchain Design §§3.4, 6.1–6.3 and
+implementation-plan T07–T09. This source cohort composes the genuine recoverable
+callback, first-refresh custody checkpoint, family engine, explicit native
+runtime interface, resource-aware identity verifiers, BotaClient and hosted MCP
+bridge. The production deployment resolver remains configuration-off.
+
+| Requirement | Implementation / focused evidence | Status |
+| --- | --- | --- |
+| Code/S256 + literal owned callback; no tokens in URLs | Service uses the genuine recoverable-attempt producer; portable fixture sends an actual owned loopback code-only HTTP callback and checks proof acknowledgement before browser publication, first-refresh acknowledgement before identity/adoption, one code POST. | Matched at disclosed source seams; real browser/account/TLS unverified. |
+| Secure custody before enrollment publication and restart recovery | Native runtime reserve/retention/adopt/readRecovery/confirmCleanup ports are composed directly. Tests use memory custody; no production factory execution. Interrupted proof/first-refresh state is not discarded or exchanged again. | Source integration matched; actual native custody qualification belongs to root's separate cohort. |
+| Explicit shared profile and resource audience | `--developer-profile` refuses API-key selectors/URL overrides, no saved/default/environment-key fallback. Local MCP requires `--mode hosted`; startup pins only metadata, every request opens current MCP authority. Actual BotaClient REST fixture succeeds inside delegated ALS. | Matched in portable command/service fixtures; installed/deployed acceptance unverified. |
+| Requested scopes are deliberate, not grant authority | Repeat `--scope`, explicit `--identity-only`, or bounded nonsecret TTY scope selection. Engine/identity still pin authoritative grant/resources/scopes. No implicit all-scope choice. | Matched; live consent display/current-account path remains separate. |
+| Unknown refresh/revocation, exact proof preservation | Exact family engine and bound-revocation HTTP adapter retained; ready profiles with retained attempt IDs recover family state without reading deleted enrollment proof. No code replay or automatic profile replacement. | Matched portable revoking/removing tests; actual cross-process Windows race/lock acceptance separate. |
+| Recover correct durable local phase | Empty reserved→abandonReserved; confirmed cleanup/removing→resumeCleanup; adopting/ready generation-zero→exact local adopt; other pending enrollment→protective attempt revocation; ready family→family recovery. Removed names remain tombstones. | Matched portable regressions and frozen native API; native restart faults separate. |
+| Success only after owned cleanup and fresh publication | Ordinary output uses per-invocation ALS buffer; action, family lease, native cleanup join before publication. Expiry checked in every guard. Writer-crossing-expiry refuses later chunks. Metadata writes now await native writer completion; no global stdout patch/MCP traffic buffer. | Matched source fixtures; already completed earlier writes cannot be recalled. |
+| Cancellation / private errors | Actual Commander wrappers forward SIGINT/SIGTERM, join held actions, remove listeners, preserve130/143. Fixed branded diagnostics reject reflective exceptions. Child-process parser tests reject accidental secret extras/unknown flags without echo or effects. | Matched; no actual owner interruption/native effects exercised. |
+| Preserve API-key compatibility | Explicit legacy key enrollment/logout remains; key-export browser callback retired. Configuration-off/no-key and selector-refusal tests preserve old config bytes and produce zero HTTP/browser effects. | Matched focused fixture; root runs full compatibility aggregate. |
+| Exact trusted configuration before activation | Root-owned production resolver has no environment/profile/custom URL fallback and throws before runtime construction. README/new session guide distinguish source contract from enabled/deployed/public behavior. | Intentionally configuration-off pending authoritative deployment and real Platform acceptance. |
+
+Final focused evidence is in
+`developer-profile-command-final-v1-receipt.json`; helper binds all current CLI
+TypeScript source, owned tests/docs, package/lock/config, actual Node binaries and
+resolved SDK/tsx/TypeScript versions before and after its serial pinned lanes.
+The component suite has47 named cases. Preserve any failed receipt rather than
+rewriting it. Root's full-suite/packed/hosted/native receipts remain independent
+delivery and acceptance gates.
+
+Bounded cohort: ordinary delegated CLI response1MiB, identity16KiB, output
+presentation64MiB (refuse, never truncate), native inventory2048records. This does
+not claim unrestricted large-transcript parity. No native credential/ACL,
+external account/browser, production TLS, package publication or activation was
+performed by this subagent. Platform browser logout remains separate from the
+CLI/MCP delegated grant.
+
+Initial supported CLI registration restriction (root decision): both REST and
+MCP resource kinds are required by the approved first-party client cohort.
+`auth status` deliberately uses REST delegated identity. General parser support
+for another registered resource subset does not qualify an MCP-only CLI session;
+the command has no REST/MCP fallback or arbitrary resource choice.
+
+Owned delivery paths: README.md; docs/platform-developer-sessions.md;
+src/commands/{auth,developer-profiles,hosted-mcp,mcp}.ts;
+src/{index,invocation-auth,output,developer-command-output,developer-profile-error,
+developer-profile-production,developer-profile-service}.ts;
+tests/{developer-command-output,developer-profile-service,developer-profile-commands,
+legacy-browser-retirement}.test.mjs. Native/family-engine/production-deployment
+changes belong to their separate owners.
+
+
+## October 22 genuine native custody and combined protocol acceptance
+
+The canonical Windows instrument now passes on Node24.19.0 and22.23.2. Each
+lane creates only two freshly journalled owned profiles and exact closed refs.
+The genuine production factory persists proof/initial/family custody, closes,
+and reopens it in a separate process. A second process holds the real namespace
+lease while a contender refuses without changing database/journal bytes. An
+injected lost acknowledgement after an actual native write leaves the exact
+proof intent recoverable after process reopen. Guarded SQLite bytes contain no
+fixture proof, refresh or access credential. No enumeration, API-key access,
+root migration, existing ACL modification or owner-record cleanup occurs.
+Only positively confirmed owned references are removed and their exact absence
+is checked. Removed metadata tombstones, journals and leasefiles stay retained.
+No canonical writer is killed; the fresh-fixture hot-journal test is separate.
+Remote identity and definitive revocation are synthetic in this native instrument.
+
+Canonical receipts: `delegated-native-canonical-b535f2d1-bcfc-4ae2-bd27-f6f88b8f9105-receipt.json`
+SHA-256 `f7f2c97d746c44e571a951b5b83f671297d46158a9aaac86966b1758c47e182c`;
+`delegated-native-canonical-adb36d4e-4fa4-4842-ba79-59486de07e31-receipt.json`
+SHA-256 `1a13a9619d284877b73ba838233a70ab68297dc24f9c1af08e0acb2e5fdce9e7`.
+The applicable AppData ACL blocker still correctly refuses the API-key root.
+This new delegated format qualifies its own complete Profile ancestry, fixed
+private leaf and exact filesystem guards; no permission exception is introduced.
+
+The combined CLI qualification passes **817 total /813 pass /four platform
+skips /zero failures** on both pinned runtimes. Full strict types pass on both;
+the packed six-file candidate installs with scripts disabled and passes its
+consumer checks; the license gate checks182 packages. All5,150 source, test,
+dependency, control, helper and runtime inputs remain unchanged. Receipt
+`native-shared-cli-final-v1-receipt.json` SHA-256
+`8898f6b134dfc691dd2906613d7da9d9eef74d5e5d73677fce2dd7d3e9f72800`.
+Two file workers bound startup load; production/test deadlines are unchanged.
+Earlier cancelled/failed development runs remain historical.
+
+A separate source-bound protocol instrument passes **15/15 on each runtime**
+through actual owned HTTP and PostgreSQL. The previous twelve scenarios retain
+their disclosed memory custody ports. Three additional scenarios use the genuine
+canonical native runtime and production profile coordinator: callback/exchange/
+adoption followed by close/reopen, REST and hosted MCP use and exact logout;
+registered pre-callback browser interruption followed by original-proof cleanup;
+and protected first-refresh retention before membership refusal, then explicit
+cleanup without exchanging the code again. All six owned native profiles finish
+removed. Every callback, component owner, raw SQL/acquisition and pool joins;
+only the exact owned test schemas are dropped and pre-existing schemas remain.
+Legacy configuration read attempts stay zero.
+
+Protocol receipts: `platform-login-native-protocol-node24-final-v1.receipt.json`
+SHA-256 `853481648cae764bf0c610efe95281f85a5e5b3c9a84ac7d953d6f42524c75ce`;
+`platform-login-native-protocol-node22-final-v2.receipt.json` SHA-256
+`2108fb2d5235819a7734ea2e5cbe5d183d9fae76c7799721d4ec67295e0b169d`.
+Independent read-only source/log/component/cleanup checking passes (receipt
+SHA-256 `9d28842d71be37338ae2a7aec42a63c56875a62f24f2d1847a39ac240aa69eaa`).
+Node22 v1 has15 successful component cases and complete cleanup, but its outer
+qualification failed when backend HEAD incorporated unrelated GuardDuty changes
+during execution. That failed receipt is retained. A fresh stable-baseline v2
+run establishes its own pass; no prior result is rewritten.
+
+| Requirement | Evidence | Current conformance |
+| --- | --- | --- |
+| Protected custody, exact references and restart | Genuine Windows Credential Manager plus guarded canonical SQLite, cross-process reopen and unknown-write recovery on both pins | Matched for this Windows/runtime cohort; macOS/Linux native providers are not implemented |
+| Cross-process authority and preservation | Real kernel namespace holder/contender; unchanged bytes, exact absence after owned cleanup | Matched; no arbitrary process-kill/canonical crash acceptance inferred |
+| Production shared CLI/MCP source wiring | Full817-case suites, strict types, packed consumer,47 focused command cases and genuine native coordinator protocol | Matched in source and controlled package/protocol cohorts; deployment resolver remains configuration-off |
+| Pre-callback recovery | Actual registered request recovered using retained native proof, with zero exchange replay | Matched for registered history; absence before first server registration remains unknown and retained |
+| Current identity and first refresh | Real HTTP/SQL admission, actual first-refresh native retention before membership failure | Matched with synthetic Cognito/Amplify, fixture device service and logical HTTPS-to-loopback mapping |
+| Real Platform login end to end | Dev readiness still returns404 for authorization/token/discovery; no live login performed | Unverified; normal private build, qualified ingress/account lifecycle, configured deployment and actual browser/SSO/MFA remain gates |
+
+This does not adopt the separate API SDK, publish the CLI package, enable an
+issuer/client, qualify an installed public CLI/MCP session, or establish an
+independent hosted-client OAuth path. The approved initial CLI client requires
+both REST and MCP; status explicitly uses REST. Production activation must use
+reviewed build-bound configuration, with deliberate1MiB ordinary-read alignment
+and16KiB identity bounds. Lost registration remains a distinct backend durable
+fence/history task; missing rows never authorize local proof deletion.

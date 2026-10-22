@@ -5,13 +5,24 @@ import { NativeProfileTransactionError, type NativeProfileBinding, type NativePr
   type NativeResolvedCredential, type NativeOperationContext } from './native-profile-transaction.js';
 import type { SecureProfileOptions } from './secure-profiles.js';
 import { hasDelegatedInvocation, refuseDelegatedCompatibility } from './delegated-invocation.js';
+import { developerProfileService } from './developer-profile-production.js';
+import type { DeveloperProfileService } from './developer-profile-service.js';
+import { DeveloperProfileError } from './developer-profile-error.js';
 
 /** Explicit native selection wraps the complete action, including its cleanup.
  * There is no preAction/postAction lock handoff or saved default selection. */
 export function withCommandAuth<Args extends unknown[], Result>(program: Command,
-  action: (...args: Args) => Result | Promise<Result>): (...args: Args) => Promise<Result> {
+  action: (...args: Args) => Result | Promise<Result>, developer: DeveloperProfileService = developerProfileService): (...args: Args) => Promise<Result> {
   return async (...args) => {
     const options = program.opts();
+    if (options['developerProfile'] !== undefined) {
+      if (hasDelegatedInvocation() || ['profile', 'secureProfile', 'apiUrl', 'dashboardUrl'].some(name => options[name] !== undefined)) throw new DeveloperProfileError('developer_profile_invalid');
+      const controller = new AbortController(); let interrupt: number | undefined;
+      const sigint = () => { interrupt = 130; controller.abort(); }, sigterm = () => { interrupt = 143; controller.abort(); };
+      process.once('SIGINT', sigint); process.once('SIGTERM', sigterm);
+      try { return await developer.run(options['developerProfile'] as string, 'rest', async () => action(...args), { signal: controller.signal }); }
+      finally { process.removeListener('SIGINT', sigint); process.removeListener('SIGTERM', sigterm); if (interrupt !== undefined) process.exitCode = interrupt; }
+    }
     if (hasDelegatedInvocation() && options['secureProfile'] !== undefined) refuseDelegatedCompatibility();
     if (options['secureProfile'] === undefined) return action(...args);
     const controller = new AbortController();
@@ -57,3 +68,13 @@ export function bindMcpRequestAuth(service: McpProfileAuthService): (name: strin
 /** Production binds only the fixed native service. The factory above is an
  * explicit trusted test port; no CLI option, environment or metadata selects it. */
 export const createMcpRequestAuth = bindMcpRequestAuth({ inspect: inspectSecureProfile, run: runWithSecureProfile });
+
+/** Pin only nonsecret native metadata at startup. Every tools/list or tools/call
+ * opens its own protected runtime and exact-resource current admission. */
+export function bindDeveloperMcpRequestAuth(service: Pick<DeveloperProfileService, 'pin' | 'run'>) {
+  return async (name: string, signal?: AbortSignal): Promise<RequestAuth> => {
+    const expected = await service.pin(name, { signal, timeoutMs: 30_000 });
+    return (signal, action) => service.run(name, 'mcp', action, { signal, timeoutMs: 30_000 }, expected);
+  };
+}
+export const createDeveloperMcpRequestAuth = bindDeveloperMcpRequestAuth(developerProfileService);

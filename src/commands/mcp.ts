@@ -8,7 +8,9 @@ import { WEBHOOK_MANAGEMENT_UNAVAILABLE } from './webhooks.js';
 import { errorDetails } from '../output.js';
 import { registerIntegrationMcpTools } from './integration-mcp.js';
 import { startHostedMcp } from './hosted-mcp.js';
-import { createMcpRequestAuth, type RequestAuth } from '../invocation-auth.js';
+import { createMcpRequestAuth, createDeveloperMcpRequestAuth, type RequestAuth } from '../invocation-auth.js';
+import { DeveloperProfileError } from '../developer-profile-error.js';
+import { developerCommandBoundary } from './developer-profiles.js';
 import { installMcpRequestAuth } from '../mcp-request-auth.js';
 import { refuseDelegatedCompatibility } from '../delegated-invocation.js';
 
@@ -26,6 +28,7 @@ function fail(e: unknown) {
 export interface McpCommandPorts {
   /** Trusted code/test composition only; never selected by command input. */
   readonly createRequestAuth: (name: string, apiUrlOverride?: string) => Promise<RequestAuth>;
+  readonly createDeveloperRequestAuth?: (name: string, signal?: AbortSignal) => Promise<RequestAuth>;
 }
 
 export function registerMcp(program: Command, ports: McpCommandPorts = { createRequestAuth: createMcpRequestAuth }): void {
@@ -36,22 +39,28 @@ export function registerMcp(program: Command, ports: McpCommandPorts = { createR
     .action(async (opts: { mode: string }) => {
       if (opts.mode !== 'legacy' && opts.mode !== 'hosted') throw new Error('--mode must be legacy or hosted.');
       const globalOpts = program.opts();
+      const developer = globalOpts['developerProfile'] !== undefined;
+      if (developer && opts.mode !== 'hosted') throw new DeveloperProfileError('developer_mcp_hosted_required');
+      if (developer && ['profile', 'secureProfile', 'apiUrl', 'dashboardUrl'].some(name => globalOpts[name] !== undefined)) throw new DeveloperProfileError('developer_profile_invalid');
       const secure = globalOpts['secureProfile'] !== undefined;
-      const authenticate = secure ? await ports.createRequestAuth(globalOpts['secureProfile'] as string, globalOpts['apiUrl'] as string | undefined) : undefined;
-      const apiKey = secure ? undefined : getApiKey();
-      const apiUrl = secure ? undefined : getApiUrl(globalOpts['apiUrl'] as string | undefined);
+      let authenticate: RequestAuth | undefined;
+      if (developer) await developerCommandBoundary(async signal => { authenticate = await (ports.createDeveloperRequestAuth ?? createDeveloperMcpRequestAuth)(globalOpts['developerProfile'] as string, signal); });
+      else if (secure) authenticate = await ports.createRequestAuth(globalOpts['secureProfile'] as string, globalOpts['apiUrl'] as string | undefined);
+      const apiKey = secure || developer ? undefined : getApiKey();
+      const apiUrl = secure || developer ? undefined : getApiUrl(globalOpts['apiUrl'] as string | undefined);
       if (opts.mode === 'hosted') { await startHostedMcp(apiUrl, apiKey, authenticate); return; }
       // Secure clients are constructed inside each authenticated callback. The
       // compatibility cohort retains its existing once-resolved startup client.
-      const startup = secure ? undefined : new BotaClient({ apiKey, apiUrl });
+      const startup = authenticate ? undefined : new BotaClient({ apiKey, apiUrl });
       const client = {
         get: <T>(path: string, params?: Record<string, string | number | undefined>) => (startup ?? new BotaClient()).get<T>(path, params),
         post: <T>(path: string, body?: unknown) => (startup ?? new BotaClient()).post<T>(path, body),
       };
 
       const server = new McpServer({ name: 'bota', version: '0.1.0' });
-      const requestAuth = authenticate ? installMcpRequestAuth(server.server,
-        (signal, action) => authenticate(signal, async () => { refuseDelegatedCompatibility(); return action(); })) : undefined;
+      const legacyAuth = authenticate;
+      const requestAuth = legacyAuth ? installMcpRequestAuth(server.server,
+        (signal, action) => legacyAuth(signal, async () => { refuseDelegatedCompatibility(); return action(); })) : undefined;
       registerIntegrationMcpTools(server, apiUrl, apiKey);
 
       server.registerTool(

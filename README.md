@@ -42,13 +42,51 @@ Status output excludes key material, key hints, and API URLs. Status rendering e
 
 Without `--profile`, the existing selection order remains: a saved configuration key takes precedence over `BOTA_API_KEY`. With no saved key, inject a restricted key through `BOTA_API_KEY`; direct `auth login <key>` retains its existing secret-key format check and plaintext storage behavior. Status does not rewrite that configuration or introduce delegated OAuth. A matching backend identity endpoint is required; source delivery, backend deployment, and CLI publication remain separate.
 
-The no-argument `bota auth login` browser flow is retired. It previously exported
-a project secret in a callback URL; it was not delegated Platform login. It now
-fails locally without opening a browser/listener or changing saved credentials.
-Platform account login for CLI/MCP remains unavailable pending secure enrollment
-and recovery qualification. `auth login <key>` is retained only for explicit
-legacy compatibility: it places the key in command history and plaintext config.
-Prefer environment injection or the secure profile commands below.
+The old browser key-export flow is retired. It previously exported a project
+secret in a callback URL; it was not delegated Platform login. No-argument
+`bota auth login` now selects the separate Platform enrollment coordinator, but
+the production deployment configuration is deliberately unavailable. It fails
+locally with `developer_configuration_unavailable` before native storage, a
+listener, browser launch or network access. There is no environment/custom-URL
+activation or fallback to saved keys. `auth login <key>` retains explicit legacy
+compatibility and its command-history/plaintext-storage limitations. Prefer
+environment injection or secure API-key profiles until Platform enrollment is
+qualified. The [Platform session guide](docs/platform-developer-sessions.md)
+describes the source-preview contract and remaining acceptance gates.
+
+### Platform developer sessions: configuration off
+
+The source preview has an explicit `--developer-profile <name>` selector for a
+protected Platform developer session. It is separate from API-key `--profile`
+and `--secure-profile`; mixed selectors or URL overrides refuse. Selection never
+changes a saved default or imports legacy credentials. Source orchestration and
+portable tests do not establish real native custody, production TLS, a completed
+browser consent flow or deployed Platform login. This path remains disabled by
+the build-bound deployment resolver; the public npm version does not include it.
+
+When that reviewed deployment cohort is enabled, the intended commands are:
+
+```bash
+# These source-preview commands currently fail configuration-unavailable.
+# Choose only the required read scopes; repeat --scope to add another.
+bota auth login --name work --scope devices:read
+bota --developer-profile work devices list
+bota --developer-profile work mcp --mode hosted
+bota --developer-profile work auth status --json
+bota auth developer-profiles show work
+bota auth developer-profiles recover work
+bota auth developer-profiles logout work
+```
+
+`--identity-only` explicitly requests no business-read scopes. Interactive login
+can ask which read scopes to request; noninteractive login must specify them or
+`--identity-only`. Consent and current backend admission determine actual access.
+Local MCP requires explicit `--mode hosted` for developer sessions. Stdio MCP
+never prompts or opens a login flow. A shared family lease serializes selected
+CLI/MCP operations and refresh; unknown refresh/revocation outcomes preserve the
+local journal and refuse further use pending explicit recovery. Logout confirms
+the exact remote family, removes only its local secret references and retains a
+name tombstone. Platform browser logout remains a separate session operation.
 
 ### Secure API-key profiles in the source preview
 

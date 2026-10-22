@@ -3,6 +3,13 @@ import Table from 'cli-table3';
 import { types } from 'node:util';
 import { isSecureInvocation } from './config.js';
 import { NativeProfileTransactionError } from './native-profile-transaction.js';
+import { captureDeveloperOutput } from './developer-command-output.js';
+import { developerProfileFailure } from './developer-profile-error.js';
+
+function line(channel: 'stdout' | 'stderr', value: string): void {
+  if (captureDeveloperOutput(channel, value + '\n')) return;
+  if (channel === 'stdout') console.log(value); else console.error(value);
+}
 
 export function printTable(headers: string[], rows: string[][]): void {
   const table = new Table({
@@ -11,20 +18,27 @@ export function printTable(headers: string[], rows: string[][]): void {
   for (const row of rows) {
     table.push(row);
   }
-  console.log(table.toString());
+  line('stdout', table.toString());
 }
 
 export function printJson(data: unknown): void {
-  console.log(JSON.stringify(data, null, 2));
+  line('stdout', JSON.stringify(data, null, 2));
 }
 
 export function printPagination(page: { has_more?: boolean; next_cursor?: string }): void {
   if (page.has_more && page.next_cursor) {
-    console.error(`More results available. Continue with --cursor ${page.next_cursor}`);
+    line('stderr', `More results available. Continue with --cursor ${page.next_cursor}`);
   }
 }
 
-export function errorDetails(error: unknown) {
+export interface ErrorDetails {
+  readonly message: string; readonly status?: number; readonly code?: string | number; readonly param?: string;
+  readonly request_id?: string; readonly retry_after?: string; readonly rate_limit?: Record<string, string>;
+  readonly recovery_required?: boolean; readonly operation_may_have_executed?: boolean;
+}
+export function errorDetails(error: unknown): ErrorDetails {
+  const developer = developerProfileFailure(error);
+  if (developer) return developer;
   if (isSecureInvocation() && !(error instanceof NativeProfileTransactionError)) {
     error = new NativeProfileTransactionError('profile_operation_failed', false, true);
   }
@@ -47,7 +61,7 @@ export function errorDetails(error: unknown) {
 export function printError(error: unknown, json = false): void {
   const detail = errorDetails(error);
   if (!json) {
-    console.error(detail.message);
+    line('stderr', detail.message);
     const diagnostics = [
       ...(detail.status !== undefined ? [`HTTP ${detail.status}`] : []),
       ...(detail.code !== undefined ? [`code: ${detail.code}`] : []),
@@ -56,10 +70,10 @@ export function printError(error: unknown, json = false): void {
       ...(detail.retry_after !== undefined ? [`Retry-After: ${detail.retry_after}`] : []),
       ...Object.entries(detail.rate_limit ?? {}).map(([name, value]) => `${name}: ${value}`),
     ];
-    if (diagnostics.length) console.error(diagnostics.join('; '));
+    if (diagnostics.length) line('stderr', diagnostics.join('; '));
     return;
   }
-  console.error(JSON.stringify({ error: detail }));
+  line('stderr', JSON.stringify({ error: detail }));
 }
 
 /** Selected secure commands finish at the provider's joined cleanup boundary.
@@ -84,18 +98,18 @@ export function handleCommandFailure(error: unknown, json = false,
 export function printDetail(obj: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(obj)) {
     const paddedKey = chalk.cyan(key.padEnd(20));
-    console.log(`${paddedKey} ${value}`);
+    line('stdout', `${paddedKey} ${value}`);
   }
 }
 
 export function ok(msg: string): void {
-  console.log(`${chalk.green('✓')} ${msg}`);
+  line('stdout', `${chalk.green('✓')} ${msg}`);
 }
 
 export function info(msg: string): void {
-  console.log(`${chalk.blue('→')} ${msg}`);
+  line('stdout', `${chalk.blue('→')} ${msg}`);
 }
 
 export function warn(msg: string): void {
-  console.log(`${chalk.yellow('⚠')} ${msg}`);
+  line('stdout', `${chalk.yellow('⚠')} ${msg}`);
 }

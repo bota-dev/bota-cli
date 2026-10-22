@@ -3,16 +3,26 @@ import { readConfig, writeConfig, getApiUrl, getProfileContext } from '../config
 import { ok } from '../output.js';
 import { showAuthStatus } from './auth-status.js';
 import { withCommandAuth } from '../invocation-auth.js';
+import { developerProfileService, writeDeveloperCommandOutput } from '../developer-profile-production.js';
+import type { DeveloperProfileService } from '../developer-profile-service.js';
+import { DeveloperProfileError } from '../developer-profile-error.js';
+import { chooseDeveloperScopes, developerCommandBoundary, developerProfileProjection, publishDeveloperMetadata, type DeveloperMetadataWriter } from './developer-profiles.js';
 
-export function registerAuth(program: Command): Command {
+export function registerAuth(program: Command, developer: DeveloperProfileService = developerProfileService,
+  write: DeveloperMetadataWriter = writeDeveloperCommandOutput): Command {
   const auth = program.command('auth').description('Manage authentication');
 
   auth
     .command('login [key]')
-    .description('Save a legacy API key; Platform browser login is unavailable')
-    .action(async (key: string | undefined) => {
+    .description('Sign in through configured Platform login, or preserve explicit legacy API-key compatibility')
+    .option('--name <name>', 'New local developer profile name', 'default')
+    .option('--scope <scope>', 'Explicit requested developer read scope; repeat for multiple scopes', (scope: string, selected: string[]) => [...selected, scope], [])
+    .option('--identity-only', 'Explicitly request identity without business-read scopes')
+    .allowExcessArguments(false)
+    .action(async (key: string | undefined, options: { name: string; scope: string[]; identityOnly?: boolean }) => {
       const globalOpts = program.opts();
       if (key) {
+        if (globalOpts['developerProfile'] !== undefined || options.name !== 'default' || options.scope.length || options.identityOnly) throw new DeveloperProfileError('developer_profile_invalid');
         const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
         // Headless / CI path: accept key directly
         if (!key.startsWith('sk_live_') && !key.startsWith('sk_test_')) {
@@ -27,16 +37,29 @@ export function registerAuth(program: Command): Command {
         return;
       }
 
-      // Retired browser key export must not be mistaken for delegated login.
-      // In particular, never open a callback listener or put a project key in a URL.
-      throw Object.assign(new Error('Platform browser login is unavailable. Supply BOTA_API_KEY through your secret manager, or use auth secure-profiles add <name> --key-prompt on a supported host.'),
-        { code: 'platform_login_unavailable' });
+      if (['profile', 'secureProfile', 'apiUrl', 'dashboardUrl'].some(option => globalOpts[option] !== undefined)) throw new DeveloperProfileError('developer_profile_invalid');
+      const selectedName = globalOpts['developerProfile'] as string | undefined;
+      if (selectedName && options.name !== 'default' && selectedName !== options.name) throw new DeveloperProfileError('developer_profile_invalid');
+      await developerCommandBoundary(async signal => {
+        const deployment = developer.configuration();
+        const scopes = await chooseDeveloperScopes(options, signal);
+        const profile = await developer.login(selectedName ?? options.name, { resourceKind: deployment.client.resourceKinds.includes('rest') ? 'rest' : 'mcp',
+          grantResourceKinds: deployment.client.resourceKinds, scopes,
+          loopbackHost: deployment.client.redirectUris.includes('http://127.0.0.1/oauth/callback') ? '127.0.0.1' : '::1' }, { signal });
+        await publishDeveloperMetadata(developerProfileProjection(profile), signal, write);
+        if (!globalOpts['json']) { await write('stderr', `Select this session with --developer-profile ${profile.name}. Revoke it with: bota auth developer-profiles logout ${profile.name}\n`);
+          if (signal.aborted) throw new DeveloperProfileError('developer_cancelled'); }
+      });
     });
 
   auth
     .command('logout')
-    .description('Remove saved API key')
-    .action(() => {
+    .description('Remove a legacy saved key, or revoke an explicitly selected developer session')
+    .action(async () => {
+      const name = program.opts()['developerProfile'];
+      if (name !== undefined) { await developerCommandBoundary(async signal => {
+        await publishDeveloperMetadata(developerProfileProjection(await developer.logout(name as string, { signal })), signal, write);
+      }); return; }
       const config = readConfig();
       delete config.apiKey;
       writeConfig(config);
@@ -46,8 +69,13 @@ export function registerAuth(program: Command): Command {
   auth
     .command('status')
     .description('Show current auth status')
-    .action(withCommandAuth(program, async () => {
+    .action(async () => {
       const globalOpts = program.opts();
+      if (globalOpts['developerProfile'] !== undefined) { await developerCommandBoundary(async signal => {
+        const value = await developer.status(globalOpts['developerProfile'] as string, { signal });
+        await publishDeveloperMetadata(value, signal, write, value.expiresAtSeconds);
+      }); return; }
+      await withCommandAuth(program, async () => {
       const context = getProfileContext();
       if (context) {
         await showAuthStatus({ ...context, json: Boolean(globalOpts['json']) });
@@ -58,6 +86,7 @@ export function registerAuth(program: Command): Command {
 
       const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
       await showAuthStatus({ apiKey: key, apiUrl, json: Boolean(globalOpts['json']) });
-    }));
+      })();
+    });
   return auth;
 }
