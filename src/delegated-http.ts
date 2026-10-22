@@ -1,5 +1,5 @@
-/** Inactive HTTP component. No command, browser, native store or identity route
- * is wired. Production and trusted fixture assembly are separate factories. */
+/** Explicit one-attempt HTTP component. Production and trusted fixture assembly
+ * are separate factories; this module never selects a deployment or native store. */
 import { types } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { parseDelegatedLoginDeployment, readDelegatedLoginExchangeBinding, isRecoverableDelegatedLoginAttempt, readDelegatedLoginRecoveryBinding,
@@ -46,6 +46,11 @@ export interface DelegatedEnrollmentRevocationConfirmation {
   readonly attemptId: string; readonly authorizationRequestId: string;
   readonly grantId: string | null; readonly familyId: string | null;
 }
+/** This confirms only an unregistered proof-bound attempt fence. It is never
+ * a registered grant/family revocation receipt. */
+export interface DelegatedUnregisteredFenceConfirmation {
+  readonly kind: 'unregistered-fenced-v1'; readonly attemptId: string; readonly fenceId: string;
+}
 export interface DelegatedHttpAdapter {
   readonly stage: 'inactive-one-attempt-http';
   exchangeCode(attempt: DelegatedLoginAttempt, context: DelegatedFamilyContext): Promise<DelegatedTokenPair>;
@@ -54,7 +59,7 @@ export interface DelegatedHttpAdapter {
   revoke(deployment: DelegatedLoginDeployment, refresh: string, expected: DelegatedRevocationBinding,
     context: DelegatedFamilyContext): Promise<DelegatedRevocationBinding | 'unknown' | 'not_submitted'>;
   revokeEnrollmentAttempt(retainedBinding: unknown, context: DelegatedFamilyContext): Promise<
-    Readonly<DelegatedEnrollmentRevocationConfirmation> | 'unknown' | 'not_submitted'>;
+    Readonly<DelegatedEnrollmentRevocationConfirmation | DelegatedUnregisteredFenceConfirmation> | 'unknown' | 'not_submitted'>;
 }
 export interface DelegatedHttpTrustedPorts {
   readonly fetch: typeof fetch;
@@ -274,6 +279,7 @@ export function createDelegatedHttpAdapterForTrustedPorts(input: unknown, inputP
         if (binding.issuer !== deployment.issuer || binding.tokenEndpoint !== deployment.endpoints.token || binding.clientId !== deployment.client.clientId
           || consumedAttempts.has(attempt) || recoverable && !retainInitialRefresh) fail('http_input_invalid');
         const recovery = recoverable ? readDelegatedLoginRecoveryBinding(attempt) : undefined;
+        if (recovery?.recoveryProtocol !== undefined && recovery.recoveryProtocol !== deployment.recoveryProtocol) fail('http_input_invalid');
         resource(binding.resource); consumedAttempts.add(attempt);
         const result = familyObject(await attempt.result, ['code']); scope.check(); readDelegatedLoginExchangeBinding(attempt);
         if (!secret('code', result.code)) fail('http_input_invalid');
@@ -316,7 +322,9 @@ export function createDelegatedHttpAdapterForTrustedPorts(input: unknown, inputP
     async revokeEnrollmentAttempt(retainedBinding: unknown, context: DelegatedFamilyContext) {
       try {
         return await operation(context, async scope => {
-          const binding = familyObject(retainedBinding, ['attemptId', 'recoveryVerifier', 'pkceVerifier', 'issuer', 'clientId', 'redirectUri', 'resource', 'grantResources', 'scopes']);
+          const binding = familyObject(retainedBinding, ['attemptId', 'recoveryVerifier', 'pkceVerifier', 'issuer', 'clientId', 'redirectUri', 'resource', 'grantResources', 'scopes'], ['recoveryProtocol']);
+          const fenced = Object.hasOwn(binding, 'recoveryProtocol');
+          if (fenced && (binding.recoveryProtocol !== 'negative-fence-v1' || deployment.recoveryProtocol !== 'negative-fence-v1')) fail('http_input_invalid');
           const verifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value)
             && Buffer.from(value, 'base64url').toString('base64url') === value;
           if (!familyUuid(binding.attemptId) || !verifier(binding.recoveryVerifier) || !verifier(binding.pkceVerifier)
@@ -328,11 +336,23 @@ export function createDelegatedHttpAdapterForTrustedPorts(input: unknown, inputP
           const grants = familyStrings(binding.grantResources, Object.values(deployment.resources), 1);
           familyStrings(binding.scopes, delegatedScopes);
           if (!grants.includes(binding.resource)) fail('http_input_invalid');
-          const raw = await post(deployment.endpoints.revocation, new URLSearchParams({ token_type_hint: 'bota_enrollment_attempt',
+          const raw = await post(deployment.endpoints.revocation, new URLSearchParams({ token_type_hint: fenced ? 'bota_enrollment_attempt_fence_v1' : 'bota_enrollment_attempt',
             token: binding.recoveryVerifier, bota_enrollment_attempt: binding.attemptId, code_verifier: binding.pkceVerifier,
             client_id: binding.clientId, redirect_uri: binding.redirectUri, resource: binding.resource }), scope, true);
           // Unsupported/ordinary RFC7009 empty success is not proof of cleanup.
           if (raw === undefined) return 'unknown' as const;
+          // A new receipt is accepted only for an explicitly opted-in retained
+          // binding; neither config nor a server response upgrades old custody.
+          if (fenced) {
+            const fields = familyObject(raw, [], ['bota_enrollment_fenced', 'bota_enrollment_attempt', 'bota_fence_id',
+              'bota_enrollment_revoked', 'bota_authorization_request_id', 'bota_grant_id', 'bota_family_id']);
+            if (Object.hasOwn(fields, 'bota_enrollment_fenced') || Object.hasOwn(fields, 'bota_fence_id')) {
+              const receipt = familyObject(raw, ['bota_enrollment_fenced', 'bota_enrollment_attempt', 'bota_fence_id']);
+              if (receipt.bota_enrollment_fenced !== 'negative-fence-v1' || receipt.bota_enrollment_attempt !== binding.attemptId
+                || !familyServerUuid(receipt.bota_fence_id)) fail('http_unknown', true);
+              return Object.freeze({ kind: 'unregistered-fenced-v1' as const, attemptId: binding.attemptId, fenceId: receipt.bota_fence_id });
+            }
+          }
           const receipt = familyObject(raw, ['bota_enrollment_revoked', 'bota_enrollment_attempt', 'bota_authorization_request_id', 'bota_grant_id', 'bota_family_id']);
           if (receipt.bota_enrollment_revoked !== true || receipt.bota_enrollment_attempt !== binding.attemptId
             || !familyServerUuid(receipt.bota_authorization_request_id)

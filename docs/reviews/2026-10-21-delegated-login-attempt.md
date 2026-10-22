@@ -744,3 +744,45 @@ both REST and MCP; status explicitly uses REST. Production activation must use
 reviewed build-bound configuration, with deliberate1MiB ordinary-read alignment
 and16KiB identity bounds. Lost registration remains a distinct backend durable
 fence/history task; missing rows never authorize local proof deletion.
+
+## October 22 prospective recovery and native v2 source
+
+The explicit trusted deployment field `recoveryProtocol:'negative-fence-v1'`
+selects only new recoverable attempts. The producer retains this choice with
+both original verifiers before publishing its URL. Restored legacy bindings
+continue using their old hint even under new configuration; a server response
+cannot upgrade their authority. New attempts send the distinct private hint
+and accept either the existing registered confirmation or the exact new
+three-field fence receipt. Empty, malformed, mismatched or uncertain responses
+retain proof and never trigger exchange replay.
+
+New opted-in profiles use `bota-delegated-native-profile-v2`. Existing v1
+canonical bytes remain unchanged. A negative receipt has no invented request,
+grant or family identifiers. Native cleanup accepts it only before any initial
+refresh/family exists, commits the exact receipt by profile CAS before deleting
+the owned proof, and resumes partial deletion from that saved receipt. The
+family engine's positive-revocation handoff cannot consume it. Endpoint
+selection, closed native roots, credential payloads and production configuration
+refusal remain unchanged.
+
+| Requirement | Evidence | Conformance |
+| --- | --- | --- |
+| Explicit new namespace without upgrading legacy custody | Twelve new wire/producer/client cases,95 selected cases and full types on both pins | Matched at controlled HTTP/loopback seams |
+| Truthful negative receipt; old registered confirmation unchanged | Exact own-data codec, duplicate/mixed/private/wrong-ID refusals and one-POST unknown outcomes | Matched; backend durable admission is a separate cohort |
+| Receipt durable before proof deletion | Ten added native-state cases using actual fixture SQLite and synthetic credential/remote ports, including lost CAS acknowledgement and unknown delete/reopen | Matched source ordering; these added cases do not establish genuine v2 WinCred E2E |
+| Negative receipt cannot clear retained refresh/family | v1/protocol mismatch and refresh-intent/refresh-ready refusals; unchanged strict family handoff | Matched at source/native fixture boundary |
+| Production Platform login | Configuration resolver stays off; actual browser/TLS/account and deployed ingress remain separate | Unverified |
+
+The combined final source suite observes839 cases on each pinned Windows runtime
+(Node24.19.0 and22.23.2):835 passed,4 expected platform/runtime skips,0 failures.
+Full strict types pass on both, the packed six-file installed consumer passes,
+and the182-package license gate passes. All5151 input hashes are identical
+before/after. Receipt `negative-fence-shared-cli-final-v1-receipt.json` SHA-256
+`2af11f40f64456731d56430530eefde8d916e6676e62e34bc52508ea57b12502`;
+independent current-input/log checker SHA-256
+`ffda8424f6c72c8ecbbce11de96b05bcee618fbd0ff364f9368f98bfefeb8cc1`.
+The original genuine canonical v1/controlled PostgreSQL receipts above remain
+historical evidence at their exact sources. An updated actual HTTP/PostgreSQL/
+canonical-native v2 instrument is prepared but has not run at this checkpoint.
+No registry publication, endpoint activation, live Platform grant or browser
+interaction is established by this source/package receipt.

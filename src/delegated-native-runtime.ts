@@ -3,15 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { types } from 'node:util';
 import { parseDelegatedLoginDeployment, type DelegatedLoginDeployment, type DelegatedLoginRetentionPort, type DelegatedLoginRecoveryBinding } from './delegated-login.js';
-import type { DelegatedInitialRefreshCustody, DelegatedEnrollmentRevocationConfirmation } from './delegated-http.js';
+import type { DelegatedInitialRefreshCustody } from './delegated-http.js';
 import type { DelegatedFamilyContext, DelegatedFamilyPorts } from './delegated-family-engine.js';
 import { familyObject, familyUuid, familyFail, delegatedFamilyFailure, delegatedFamilyKey, familyReferences, sameFamilySet,
   decodeDelegatedFamilySnapshot, type DelegatedFamilySnapshot, type DelegatedFamilyKey, type DelegatedRefreshReference } from './delegated-family-state.js';
 import { DELEGATED_NATIVE_STORE_ID, delegatedNativeSecret, delegatedNativeSecretReference, encodeDelegatedNativeProof, decodeDelegatedNativeProof,
   type DelegatedNativeSecretReference, type DelegatedNativeSecretApi } from './delegated-native-contract.js';
-import { DELEGATED_NATIVE_PROFILE_FORMAT, delegatedNativeName, decodeDelegatedNativeProfile, delegatedNativeRecoveryMetadata,
-  delegatedNativeCleanupReceipt, delegatedNativeStrings, recoverDelegatedNativeBinding,
-  type DelegatedNativeProfileRecord, type DelegatedNativeProfileState } from './delegated-native-state.js';
+import { DELEGATED_NATIVE_PROFILE_FORMAT, DELEGATED_NATIVE_FENCED_PROFILE_FORMAT, delegatedNativeName, decodeDelegatedNativeProfile, delegatedNativeRecoveryMetadata,
+  delegatedNativeCleanupReceipt, isDelegatedNativeFenceReceipt, delegatedNativeStrings, recoverDelegatedNativeBinding,
+  type DelegatedNativeCleanupReceipt, type DelegatedNativeProfileRecord, type DelegatedNativeProfileState } from './delegated-native-state.js';
 import { DelegatedNativeSnapshots, delegatedNativeLeaseName, type DelegatedNativeRecordKey } from './delegated-native-snapshots.js';
 import { openWindowsNativeLease, WINDOWS_NATIVE_STORE_ID, type WindowsNativeLease } from './windows-native-lease.js';
 import { createWindowsDelegatedCredentialApi } from './windows-native-api.js';
@@ -36,7 +36,7 @@ export interface DelegatedNativeRuntime {
   retainInitialRefresh(name: string): DelegatedInitialRefreshCustody;
   adopt(name: string, expectedAttemptId: string, key: DelegatedFamilyKey, context: DelegatedFamilyContext): Promise<DelegatedNativeProfile>;
   readRecovery(name: string, expectedAttemptId: string, context: DelegatedFamilyContext): Promise<DelegatedLoginRecoveryBinding>;
-  confirmCleanup(name: string, expectedAttemptId: string, receipt: DelegatedEnrollmentRevocationConfirmation, context: DelegatedFamilyContext): Promise<DelegatedNativeProfile>;
+  confirmCleanup(name: string, expectedAttemptId: string, receipt: DelegatedNativeCleanupReceipt, context: DelegatedFamilyContext): Promise<DelegatedNativeProfile>;
   resumeCleanup(name: string, context: DelegatedFamilyContext): Promise<DelegatedNativeProfile>;
   finalizeRemoval(name: string, expectedFamilyKey: DelegatedFamilyKey, context: DelegatedFamilyContext): Promise<DelegatedNativeProfile>;
   close(): void | Promise<void>;
@@ -178,11 +178,18 @@ export function createDelegatedNativeRuntimeForTrustedPorts(ports: DelegatedNati
     if (!found) return familyFail('binding_mismatch');
     return delegatedNativeSecretReference({ kind: 'family-refresh', ownerId: found.localFamilyId, credentialId: found.credentialId, localGeneration: found.localGeneration });
   };
+  const checkedCleanup = (record: DelegatedNativeProfileRecord, receipt: unknown): DelegatedNativeCleanupReceipt => {
+    const confirmed = delegatedNativeCleanupReceipt(receipt, record.attempt?.attemptId ?? '', record.format === DELEGATED_NATIVE_FENCED_PROFILE_FORMAT);
+    if (isDelegatedNativeFenceReceipt(confirmed)) {
+      if (record.attempt?.recoveryProtocol !== 'negative-fence-v1' || record.initial !== null || record.family !== null
+        || !['proof-intent', 'proof-ready', 'cleanup-confirmed', 'removing', 'removed'].includes(record.state)) return familyFail('binding_mismatch', true);
+    } else if (record.initial && (confirmed.grantId !== record.initial.grantId || confirmed.familyId !== record.initial.familyId)) return familyFail('binding_mismatch', true);
+    return confirmed;
+  };
   const finishConfirmedCleanup = async (previous: DelegatedNativeProfileRecord, context: DelegatedFamilyContext): Promise<DelegatedNativeProfile> => {
     let record = previous;
     if (!record.attempt || !record.cleanupReceipt || !['cleanup-confirmed', 'removing', 'removed'].includes(record.state)) return familyFail('pending', true);
-    const confirmed = delegatedNativeCleanupReceipt(record.cleanupReceipt, record.attempt.attemptId);
-    if (record.initial && (confirmed.grantId !== record.initial.grantId || confirmed.familyId !== record.initial.familyId)) return familyFail('binding_mismatch', true);
+    checkedCleanup(record, record.cleanupReceipt);
     const pending = pendingKey(record); if (pending) { const family = await relatedFamily(record, pending, context); if (family && family.state !== 'removed') return familyFail('pending', true); }
     if (record.state === 'removed') return metadata(record);
     if (record.attempt.proof) { discardSecret(record.attempt.proof, context); record = await publishProfile(record, nextProfile(record, { state: 'removing', attempt: { ...record.attempt, proof: null } }), context); }
@@ -211,7 +218,7 @@ export function createDelegatedNativeRuntimeForTrustedPorts(ports: DelegatedNati
   return Object.freeze({ familyPorts,
     reserve(name, deployment, context) { const selected = delegatedNativeName(name), checked = parseDelegatedLoginDeployment(deployment);
       return operation(profileKey(selected), context, async context => { if (await selectedProfile(selected, context)) return familyFail('exists');
-        const next = decodeDelegatedNativeProfile({ format: DELEGATED_NATIVE_PROFILE_FORMAT, revision: fresh(), name: selected, deployment: checked,
+        const next = decodeDelegatedNativeProfile({ format: checked.recoveryProtocol === 'negative-fence-v1' ? DELEGATED_NATIVE_FENCED_PROFILE_FORMAT : DELEGATED_NATIVE_PROFILE_FORMAT, revision: fresh(), name: selected, deployment: checked,
           state: 'reserved', attempt: null, initial: null, family: null, cleanupReceipt: null }, selected);
         return metadata(await publishProfile(null, next, context)); }); },
     abandonReserved(name, context) { const selected = delegatedNativeName(name); return operation(profileKey(selected), context, async context => {
@@ -225,7 +232,7 @@ export function createDelegatedNativeRuntimeForTrustedPorts(ports: DelegatedNati
     retentionPort(name) { const selected = delegatedNativeName(name); return Object.freeze({ retain(binding: DelegatedLoginRecoveryBinding, context: DelegatedFamilyContext) {
       return operation(profileKey(selected), context, async context => {
         let record = await requiredProfile(selected, context); if (record.state !== 'reserved') return familyFail('pending', true);
-        const item = familyObject(binding, ['attemptId', 'recoveryVerifier', 'pkceVerifier', 'issuer', 'clientId', 'redirectUri', 'resource', 'grantResources', 'scopes']);
+        const item = familyObject(binding, ['attemptId', 'recoveryVerifier', 'pkceVerifier', 'issuer', 'clientId', 'redirectUri', 'resource', 'grantResources', 'scopes'], ['recoveryProtocol']);
         const proof = encodeDelegatedNativeProof({ recoveryVerifier: item.recoveryVerifier, pkceVerifier: item.pkceVerifier });
         const reference = delegatedNativeSecretReference({ kind: 'attempt-proof', ownerId: item.attemptId, credentialId: fresh() });
         const attempt = delegatedNativeRecoveryMetadata(binding, record.deployment, reference);
@@ -270,8 +277,7 @@ export function createDelegatedNativeRuntimeForTrustedPorts(ports: DelegatedNati
     }); },
     confirmCleanup(name, expectedAttemptId, receipt, context) { const selected = delegatedNativeName(name); return operation(profileKey(selected), context, async context => {
       let record = await requiredProfile(selected, context); if (!record.attempt || record.attempt.attemptId !== expectedAttemptId || ['ready', 'adopting'].includes(record.state)) return familyFail('binding_mismatch', true);
-      const confirmed = delegatedNativeCleanupReceipt(receipt, expectedAttemptId);
-      if (record.initial && (confirmed.grantId !== record.initial.grantId || confirmed.familyId !== record.initial.familyId)) return familyFail('binding_mismatch', true);
+      const confirmed = checkedCleanup(record, receipt);
       const pending = pendingKey(record); if (pending) { const family = await relatedFamily(record, pending, context); if (family && family.state !== 'removed') return familyFail('pending', true); }
       if (record.state === 'removed') { if (JSON.stringify(record.cleanupReceipt) !== JSON.stringify(confirmed)) return familyFail('binding_mismatch'); return metadata(record); }
       if (record.cleanupReceipt && JSON.stringify(record.cleanupReceipt) !== JSON.stringify(confirmed)) return familyFail('binding_mismatch', true);

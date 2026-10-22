@@ -106,6 +106,22 @@ chooses another profile when the selected one is unavailable.
 | Ready profile with unknown family refresh/revocation/removal | Recover the family journal. Retained enrollment IDs are metadata, not evidence that enrollment proof still exists. |
 | Removed tombstone | Return the existing result; do not replace or revive it. |
 
+New reviewed deployments may explicitly select `negative-fence-v1` recovery.
+Those enrollments use a separate v2 metadata format. If the browser stops before
+the server registers the request, recovery can permanently fence the exact
+attempt, both proof commitments, client, redirect and selected resource. The
+server commits that fence before returning its distinct receipt; the native
+coordinator saves the receipt before deleting its exact owned proof. A delayed
+copy of that authorization URL then refuses enrollment.
+
+This protocol is prospective. Existing v1 records and requests keep their
+original format and registered-request recovery. A missing old request or an
+empty HTTP 200 remains unknown; neither permits proof deletion. A negative
+receipt cannot clean a profile that has already retained an initial refresh or
+adopted a family. Registered recovery continues to confirm the actual request,
+grant and family instead. Protective recovery compares the original saved
+binding even if its client, redirect or resource registration has since changed.
+
 Logout requires positive confirmation of the exact remote family before local
 proof removal. Empty OAuth revocation HTTP 200 alone is not that confirmation.
 Unknown remote or local writes retain recovery metadata and block use. Successful

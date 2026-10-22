@@ -11,7 +11,7 @@ import { parseDelegatedLoginDeployment } from '../src/delegated-login.ts';
 import { DelegatedFamilyEngine, createTrustedDelegatedEnrollmentHandoff, createTrustedDelegatedRevocationHandoff } from '../src/delegated-family-engine.ts';
 import { delegatedNativeSecretReference, delegatedNativeSecret, delegatedNativeCredentialNames, encodeDelegatedNativeProof, decodeDelegatedNativeProof,
   DELEGATED_NATIVE_STORE_ID, DELEGATED_NATIVE_DATABASE, DELEGATED_NATIVE_JOURNAL } from '../src/delegated-native-contract.ts';
-import { decodeDelegatedNativeProfile, decodeDelegatedNativeProfileBytes } from '../src/delegated-native-state.ts';
+import { decodeDelegatedNativeProfile, decodeDelegatedNativeProfileBytes, delegatedNativeCleanupReceipt } from '../src/delegated-native-state.ts';
 import { DelegatedNativeSnapshots, delegatedNativeLeaseName } from '../src/delegated-native-snapshots.ts';
 import { createDelegatedNativeRuntimeForTrustedPorts, createWindowsDelegatedNativeRuntime } from '../src/delegated-native-runtime.ts';
 
@@ -98,6 +98,117 @@ function engine(runtime, overrides = {}) {
 }
 function handoff() { return createTrustedDelegatedEnrollmentHandoff(deployment, async () => ({ accessToken: access, refreshToken: refresh, resource: deployment.resources.rest,
   expiresAtSeconds: accessExpiry, grantId, familyId, scopes: binding.scopes })); }
+
+const fencedDeployment = parseDelegatedLoginDeployment({ ...deployment, recoveryProtocol: 'negative-fence-v1' });
+const fencedBinding = Object.freeze({ ...binding, recoveryProtocol: 'negative-fence-v1' });
+const fenceReceipt = Object.freeze({ kind: 'unregistered-fenced-v1', attemptId, fenceId: '60000000-0000-4000-8000-000000000006' });
+async function retainedFenced(f) {
+  const { runtime } = f.open();
+  await runtime.reserve('dev', fencedDeployment, ctx());
+  await runtime.retentionPort('dev').retain(fencedBinding, ctx());
+  return runtime;
+}
+
+test('native v2 is an explicit protocol format and preserves exact legacy v1 bytes', () => {
+  const original = { format: 'bota-delegated-native-profile-v1', revision: randomUUID(), name: 'dev', deployment,
+    state: 'reserved', attempt: null, initial: null, family: null, cleanupReceipt: null };
+  const bytes = Buffer.from(JSON.stringify(original) + '\n');
+  assert.deepEqual(decodeDelegatedNativeProfileBytes(bytes, 'dev'), original);
+  assert.equal(Buffer.from(JSON.stringify(decodeDelegatedNativeProfile(original, 'dev')) + '\n').equals(bytes), true);
+  for (const value of [{ ...original, deployment: fencedDeployment }, { ...original, format: 'bota-delegated-native-profile-v2' }])
+    assert.throws(() => decodeDelegatedNativeProfile(value, 'dev'), safe('invalid_state'));
+  const explicit = { ...original, format: 'bota-delegated-native-profile-v2', deployment: fencedDeployment };
+  assert.deepEqual(decodeDelegatedNativeProfile(explicit, 'dev'), explicit);
+});
+
+test('negative native receipt needs explicit permission and exact disjoint fields without reflective hooks', () => {
+  assert.throws(() => delegatedNativeCleanupReceipt(fenceReceipt, attemptId), safe('invalid_input'));
+  assert.deepEqual(delegatedNativeCleanupReceipt(fenceReceipt, attemptId, true), fenceReceipt);
+  assert.deepEqual(delegatedNativeCleanupReceipt(receipt, attemptId, true), receipt);
+  for (const value of [{ ...fenceReceipt, grantId: null }, { ...fenceReceipt, authorizationRequestId: receipt.authorizationRequestId },
+    { ...fenceReceipt, attemptId: randomUUID() }, { ...fenceReceipt, fenceId: 'unknown' }, { ...fenceReceipt, kind: 'other' }])
+    assert.throws(() => delegatedNativeCleanupReceipt(value, attemptId, true), safe());
+  let hooks = 0;
+  const accessor = Object.defineProperty({ ...fenceReceipt }, 'kind', { enumerable: true, get() { hooks++; return fenceReceipt.kind; } });
+  const proxy = new Proxy(fenceReceipt, { ownKeys() { hooks++; throw Error('PRIVATE_HOOK'); } });
+  for (const value of [accessor, proxy]) assert.throws(() => delegatedNativeCleanupReceipt(value, attemptId, true), safe());
+  assert.equal(hooks, 0);
+});
+
+sqliteTest('v2 native proof persists its protocol and acknowledges the exact fence before any deletion', async t => {
+  const f = fixture(t), runtime = await retainedFenced(f);
+  assert.equal(f.record().format, 'bota-delegated-native-profile-v2');
+  assert.deepEqual(await runtime.readRecovery('dev', attemptId, ctx()), fencedBinding);
+  let deletions = 0;
+  f.deleteHook = () => { deletions++; assert.equal(f.record().state, 'cleanup-confirmed'); assert.deepEqual(f.record().cleanupReceipt, fenceReceipt); };
+  assert.equal((await runtime.confirmCleanup('dev', attemptId, fenceReceipt, ctx())).state, 'removed');
+  assert.equal(deletions, 1); assert.equal(f.secrets.size, 1);
+  assert.equal((await runtime.confirmCleanup('dev', attemptId, fenceReceipt, ctx())).state, 'removed');
+  await assert.rejects(runtime.reserve('dev', fencedDeployment, ctx()), safe('exists'));
+});
+
+sqliteTest('v1 native proof refuses a negative receipt without changing metadata or secrets', async t => {
+  const f = fixture(t), runtime = await retained(f), before = f.record(), calls = f.calls.length;
+  await assert.rejects(runtime.confirmCleanup('dev', attemptId, fenceReceipt, ctx()), safe('invalid_input'));
+  assert.deepEqual(f.record(), before); assert.equal(f.calls.length, calls);
+  assert.deepEqual(await runtime.readRecovery('dev', attemptId, ctx()), binding);
+});
+
+sqliteTest('native protocol cannot be inferred or changed at retention before a secret write', async t => {
+  const f = fixture(t), { runtime } = f.open();
+  await runtime.reserve('dev', fencedDeployment, ctx());
+  await assert.rejects(runtime.retentionPort('dev').retain(binding, ctx()), safe('binding_mismatch'));
+  assert.equal(f.record().state, 'reserved'); assert.equal(f.calls.length, 0);
+  await runtime.retentionPort('dev').retain(fencedBinding, ctx());
+  assert.equal((await runtime.load('dev', ctx())).state, 'proof-ready');
+});
+
+for (const state of ['refresh-intent', 'refresh-ready']) {
+  sqliteTest(`negative receipt refuses native ${state} even when no family is published`, async t => {
+    const f = fixture(t), runtime = await retainedFenced(f);
+    if (state === 'refresh-intent') {
+      f.writeOutcome = 'not_stored';
+      await assert.rejects(runtime.retainInitialRefresh('dev')(initial, ctx()), safe('store_unknown', true));
+    } else await runtime.retainInitialRefresh('dev')(initial, ctx());
+    const before = f.record(), calls = f.calls.length;
+    assert.equal(before.state, state);
+    await assert.rejects(runtime.confirmCleanup('dev', attemptId, fenceReceipt, ctx()), safe('binding_mismatch', true));
+    assert.deepEqual(f.record(), before); assert.equal(f.calls.length, calls);
+  });
+}
+
+sqliteTest('lost native fence-receipt acknowledgement preserves proof and resumes only the saved receipt', async t => {
+  const f = fixture(t), runtime = await retainedFenced(f);
+  f.afterPublish = async (_key, _previous, next) => { if (next.state === 'cleanup-confirmed') throw Error('PRIVATE_LOST_RECEIPT_ACK'); };
+  await assert.rejects(runtime.confirmCleanup('dev', attemptId, fenceReceipt, ctx()), safe());
+  assert.equal(f.record().state, 'cleanup-confirmed'); assert.deepEqual(f.record().cleanupReceipt, fenceReceipt);
+  assert.equal(f.calls.filter(call => call[0] === 'delete').length, 0);
+  await runtime.close(); f.afterPublish = undefined;
+  const reopened = f.open().runtime;
+  assert.equal((await reopened.resumeCleanup('dev', ctx())).state, 'removed'); assert.equal(f.secrets.size, 1);
+});
+
+sqliteTest('unknown native proof deletion keeps the saved fence and joins cleanup after reopen', async t => {
+  const f = fixture(t), runtime = await retainedFenced(f);
+  f.deleteOutcome = 'unknown';
+  await assert.rejects(runtime.confirmCleanup('dev', attemptId, fenceReceipt, ctx()), safe('store_unknown', true));
+  assert.equal(f.record().state, 'cleanup-confirmed'); assert.deepEqual(f.record().cleanupReceipt, fenceReceipt);
+  assert.equal(f.secrets.size, 1);
+  await runtime.close(); f.deleteOutcome = undefined;
+  const reopened = f.open().runtime;
+  assert.equal((await reopened.resumeCleanup('dev', ctx())).state, 'removed');
+});
+
+sqliteTest('negative cleanup of an unknown proof write requires the explicit retained v2 binding', async t => {
+  const f = fixture(t), { runtime } = f.open();
+  await runtime.reserve('dev', fencedDeployment, ctx()); f.writeOutcome = 'unknown';
+  await assert.rejects(runtime.retentionPort('dev').retain(fencedBinding, ctx()), safe('store_unknown', true));
+  assert.equal(f.record().state, 'proof-intent');
+  await runtime.close(); f.writeOutcome = undefined;
+  const reopened = f.open().runtime;
+  assert.deepEqual(await reopened.readRecovery('dev', attemptId, ctx()), fencedBinding);
+  assert.equal((await reopened.confirmCleanup('dev', attemptId, fenceReceipt, ctx())).state, 'removed');
+});
 
 test('closed credential cohort rejects API-key references, malformed proofs and reflective inputs without hooks', () => {
   const ref = { kind: 'attempt-proof', ownerId: attemptId, credentialId: randomUUID() }, proof = encodeDelegatedNativeProof({ recoveryVerifier: recovery, pkceVerifier: pkce });

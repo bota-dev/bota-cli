@@ -4,8 +4,8 @@ import type { Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { types } from 'node:util';
 
-/** Inactive client foundation. Nothing imports this module from a command. It
- * performs no discovery, browser launch, token exchange or profile/store write.
+/** Explicit callback contract. This module performs no discovery, browser
+ * launch, token exchange or profile/store write; its trusted caller owns them.
  * Receiving a code does not establish a human identity or complete login. */
 export const DELEGATED_LOGIN_STAGE = 'inactive-client-contract' as const;
 export const DELEGATED_LOGIN_LIMITS = Object.freeze({
@@ -30,6 +30,8 @@ function fail(code: Failure = 'login_configuration_invalid'): never { throw new 
 export interface DelegatedLoginDeployment {
   readonly version: 1;
   readonly issuer: string;
+  /** Trusted source opt-in only; absent means the legacy recovery namespace. */
+  readonly recoveryProtocol?: 'negative-fence-v1';
   readonly endpoints: Readonly<{ authorization: string; token: string; revocation: string }>;
   readonly resources: Readonly<{ rest: string; mcp: string }>;
   readonly client: Readonly<{ clientId: string; kind: 'native'; redirectUris: readonly string[];
@@ -70,6 +72,7 @@ export interface DelegatedLoginRecoveryBinding {
   readonly resource: string;
   readonly grantResources: readonly string[];
   readonly scopes: readonly Scope[];
+  readonly recoveryProtocol?: 'negative-fence-v1';
 }
 export interface DelegatedLoginRetentionContext {
   readonly signal: AbortSignal;
@@ -84,13 +87,15 @@ export interface DelegatedLoginRetentionPort {
 
 // Snapshot own data only, before traversing input. No getters, proxies, coercion
 // or toJSON hooks can redirect a deployment or leak input through diagnostics.
-function record(input: unknown, keys: readonly string[]): Record<string, unknown> {
+function record(input: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
   if (!input || typeof input !== 'object' || types.isProxy(input)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) fail();
   const descriptors = Object.getOwnPropertyDescriptors(input);
-  if (Reflect.ownKeys(input).length !== keys.length
-    || !keys.every(key => descriptors[key]?.enumerable && Object.hasOwn(descriptors[key]!, 'value'))) fail();
-  return Object.fromEntries(keys.map(key => [key, descriptors[key]!.value]));
+  const names = Reflect.ownKeys(input);
+  if (names.length > keys.length + optional.length || keys.some(key => !Object.hasOwn(descriptors, key))
+    || names.some(key => typeof key !== 'string' || ![...keys, ...optional].includes(key)
+      || !descriptors[key]?.enumerable || !Object.hasOwn(descriptors[key]!, 'value'))) fail();
+  return Object.fromEntries((names as string[]).map(key => [key, descriptors[key]!.value]));
 }
 function strings(input: unknown, allowed: readonly string[], minimum = 1): readonly string[] {
   if (types.isProxy(input) || !Array.isArray(input) || input.length < minimum || input.length > allowed.length
@@ -118,11 +123,11 @@ function httpsUri(input: unknown, originOnly = false): input is string {
  * Exact endpoint paths match the backend's inactive developer-auth manifest. */
 export function parseDelegatedLoginDeployment(input: unknown): DelegatedLoginDeployment {
   try {
-    const value = record(input, ['version', 'issuer', 'endpoints', 'resources', 'client']);
+    const value = record(input, ['version', 'issuer', 'endpoints', 'resources', 'client'], ['recoveryProtocol']);
     const endpoints = record(value.endpoints, ['authorization', 'token', 'revocation']);
     const resources = record(value.resources, ['rest', 'mcp']);
     const client = record(value.client, ['clientId', 'kind', 'redirectUris', 'resourceKinds', 'pkceMethod']);
-    if (value.version !== 1 || !httpsUri(value.issuer, true)
+    if (value.version !== 1 || Object.hasOwn(value, 'recoveryProtocol') && value.recoveryProtocol !== 'negative-fence-v1' || !httpsUri(value.issuer, true)
       || endpoints.authorization !== `${value.issuer}/oauth/authorize` || endpoints.token !== `${value.issuer}/oauth/token`
       || endpoints.revocation !== `${value.issuer}/oauth/revoke` || !httpsUri(resources.rest) || !httpsUri(resources.mcp)
       || typeof client.clientId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(client.clientId)
@@ -135,6 +140,7 @@ export function parseDelegatedLoginDeployment(input: unknown): DelegatedLoginDep
       `${value.issuer}/.well-known/oauth-authorization-server`, ...resourceMetadata];
     if (new Set(uris).size !== uris.length) fail();
     return Object.freeze({ version: 1, issuer: value.issuer,
+      ...value.recoveryProtocol === 'negative-fence-v1' ? { recoveryProtocol: 'negative-fence-v1' as const } : {},
       endpoints: Object.freeze({ authorization: endpoints.authorization, token: endpoints.token, revocation: endpoints.revocation }) as DelegatedLoginDeployment['endpoints'],
       resources: Object.freeze({ rest: resources.rest, mcp: resources.mcp }),
       client: Object.freeze({ clientId: client.clientId, kind: 'native', pkceMethod: 'S256',
@@ -353,6 +359,7 @@ async function startAttempt(deploymentInput: unknown, selectionInput: unknown,
     authorizationUrl.searchParams.set('enrollment_attempt', attemptId);
     authorizationUrl.searchParams.set('recovery_challenge', createHash('sha256').update(recoveryVerifier, 'ascii').digest('base64url'));
     authorizationUrl.searchParams.set('recovery_challenge_method', 'S256');
+    if (deployment.recoveryProtocol) authorizationUrl.searchParams.set('recovery_protocol', deployment.recoveryProtocol);
   }
   for (const kind of chosen.grantResourceKinds) authorizationUrl.searchParams.append('resource', deployment.resources[kind]);
   if (chosen.scopes.length) authorizationUrl.searchParams.set('scope', chosen.scopes.join(' '));
@@ -362,7 +369,8 @@ async function startAttempt(deploymentInput: unknown, selectionInput: unknown,
   let recoveryBinding: DelegatedLoginRecoveryBinding | undefined;
   if (retain && retentionController && attemptId && recoveryVerifier) {
     recoveryBinding = Object.freeze({ attemptId, recoveryVerifier, pkceVerifier: verifier, issuer: deployment.issuer, clientId: deployment.client.clientId,
-      redirectUri, resource: binding.resource, grantResources: binding.grantResources, scopes: binding.scopes });
+      redirectUri, resource: binding.resource, grantResources: binding.grantResources, scopes: binding.scopes,
+      ...deployment.recoveryProtocol ? { recoveryProtocol: deployment.recoveryProtocol } : {} });
     let active = true, failed = false, acknowledgement: Readonly<{ status: 'retained'; attemptId: string }> | undefined;
     const assertActive = () => {
       const failure = currentFailure();

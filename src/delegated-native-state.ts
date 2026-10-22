@@ -7,22 +7,31 @@ import { delegatedNativeSecretReference, DELEGATED_NATIVE_STORE_ID, DELEGATED_NA
   type DelegatedNativeSecretReference } from './delegated-native-contract.js';
 
 export const DELEGATED_NATIVE_PROFILE_FORMAT = 'bota-delegated-native-profile-v1';
+export const DELEGATED_NATIVE_FENCED_PROFILE_FORMAT = 'bota-delegated-native-profile-v2';
 export type DelegatedNativeProfileState = 'reserved' | 'proof-intent' | 'proof-ready' | 'refresh-intent' | 'refresh-ready'
   | 'adopting' | 'ready' | 'cleanup-confirmed' | 'removing' | 'removed';
 export interface DelegatedNativeAttempt {
   readonly attemptId: string; readonly redirectUri: string; readonly resource: string;
   readonly grantResources: readonly string[]; readonly scopes: readonly string[];
   readonly proof: DelegatedNativeSecretReference | null;
+  readonly recoveryProtocol?: 'negative-fence-v1';
 }
 export interface DelegatedNativeInitial {
   readonly grantId: string; readonly familyId: string; readonly resource: string; readonly scopes: readonly string[];
   readonly reference: DelegatedNativeSecretReference | null;
 }
-export interface DelegatedNativeCleanupReceipt {
+export interface DelegatedNativeRegisteredCleanupReceipt {
   readonly attemptId: string; readonly authorizationRequestId: string; readonly grantId: string | null; readonly familyId: string | null;
 }
+export interface DelegatedNativeFenceReceipt {
+  readonly kind: 'unregistered-fenced-v1'; readonly attemptId: string; readonly fenceId: string;
+}
+export type DelegatedNativeCleanupReceipt = DelegatedNativeRegisteredCleanupReceipt | DelegatedNativeFenceReceipt;
+export function isDelegatedNativeFenceReceipt(value: DelegatedNativeCleanupReceipt): value is DelegatedNativeFenceReceipt {
+  return Object.hasOwn(value, 'kind');
+}
 export interface DelegatedNativeProfileRecord {
-  readonly format: typeof DELEGATED_NATIVE_PROFILE_FORMAT; readonly revision: string; readonly name: string;
+  readonly format: typeof DELEGATED_NATIVE_PROFILE_FORMAT | typeof DELEGATED_NATIVE_FENCED_PROFILE_FORMAT; readonly revision: string; readonly name: string;
   readonly deployment: DelegatedLoginDeployment; readonly state: DelegatedNativeProfileState;
   readonly attempt: DelegatedNativeAttempt | null; readonly initial: DelegatedNativeInitial | null;
   readonly family: Readonly<{ key: DelegatedFamilyKey; revision: string }> | null;
@@ -40,7 +49,9 @@ export function delegatedNativeStrings(value: unknown, allowed: readonly string[
   return Object.freeze(copied as string[]);
 }
 export function delegatedNativeAttempt(value: unknown, deployment: DelegatedLoginDeployment): DelegatedNativeAttempt {
-  const item = familyObject(value, ['attemptId', 'redirectUri', 'resource', 'grantResources', 'scopes', 'proof']);
+  const item = familyObject(value, ['attemptId', 'redirectUri', 'resource', 'grantResources', 'scopes', 'proof'], ['recoveryProtocol']);
+  if (item.recoveryProtocol !== deployment.recoveryProtocol
+    || Object.hasOwn(item, 'recoveryProtocol') !== Object.hasOwn(deployment, 'recoveryProtocol')) return familyFail('binding_mismatch');
   if (!familyUuid(item.attemptId) || typeof item.redirectUri !== 'string' || typeof item.resource !== 'string') return familyFail();
   const redirect = new URL(item.redirectUri), base = `http://${redirect.hostname}/oauth/callback`;
   if (item.redirectUri !== redirect.href || redirect.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(redirect.hostname)
@@ -52,16 +63,25 @@ export function delegatedNativeAttempt(value: unknown, deployment: DelegatedLogi
   const proof = item.proof === null ? null : delegatedNativeSecretReference(item.proof);
   if (proof && (proof.kind !== 'attempt-proof' || proof.ownerId !== item.attemptId)) return familyFail();
   return Object.freeze({ attemptId: item.attemptId, redirectUri: item.redirectUri, resource: item.resource,
-    grantResources, scopes: delegatedNativeStrings(item.scopes, delegatedScopes), proof });
+    grantResources, scopes: delegatedNativeStrings(item.scopes, delegatedScopes), proof,
+    ...item.recoveryProtocol === 'negative-fence-v1' ? { recoveryProtocol: item.recoveryProtocol } as const : {} });
 }
 export function delegatedNativeRecoveryMetadata(value: unknown, deployment: DelegatedLoginDeployment,
   proof: DelegatedNativeSecretReference): DelegatedNativeAttempt {
-  const item = familyObject(value, ['attemptId', 'recoveryVerifier', 'pkceVerifier', 'issuer', 'clientId', 'redirectUri', 'resource', 'grantResources', 'scopes']);
+  const item = familyObject(value, ['attemptId', 'recoveryVerifier', 'pkceVerifier', 'issuer', 'clientId', 'redirectUri', 'resource', 'grantResources', 'scopes'], ['recoveryProtocol']);
   if (item.issuer !== deployment.issuer || item.clientId !== deployment.client.clientId) return familyFail('binding_mismatch');
   return delegatedNativeAttempt({ attemptId: item.attemptId, redirectUri: item.redirectUri, resource: item.resource,
-    grantResources: item.grantResources, scopes: item.scopes, proof }, deployment);
+    grantResources: item.grantResources, scopes: item.scopes, proof,
+    ...Object.hasOwn(item, 'recoveryProtocol') ? { recoveryProtocol: item.recoveryProtocol } : {} }, deployment);
 }
-export function delegatedNativeCleanupReceipt(value: unknown, attemptId: string): DelegatedNativeCleanupReceipt {
+export function delegatedNativeCleanupReceipt(value: unknown, attemptId: string, allowFence = false): DelegatedNativeCleanupReceipt {
+  const shape = familyObject(value, ['attemptId'], ['kind', 'fenceId', 'authorizationRequestId', 'grantId', 'familyId']);
+  if (Object.hasOwn(shape, 'kind')) {
+    const item = familyObject(value, ['kind', 'attemptId', 'fenceId']);
+    if (!allowFence || item.kind !== 'unregistered-fenced-v1' || item.attemptId !== attemptId
+      || !familyServerUuid(item.fenceId)) return familyFail('invalid_input');
+    return Object.freeze({ kind: 'unregistered-fenced-v1', attemptId, fenceId: item.fenceId });
+  }
   const item = familyObject(value, ['attemptId', 'authorizationRequestId', 'grantId', 'familyId']);
   if (item.attemptId !== attemptId || !familyServerUuid(item.authorizationRequestId)
     || item.grantId !== null && !familyServerUuid(item.grantId) || item.familyId !== null && !familyServerUuid(item.familyId)
@@ -72,8 +92,12 @@ export function delegatedNativeCleanupReceipt(value: unknown, attemptId: string)
 export function decodeDelegatedNativeProfile(value: unknown, expectedName: string): DelegatedNativeProfileRecord {
   try {
     const item = familyObject(value, ['format', 'revision', 'name', 'deployment', 'state', 'attempt', 'initial', 'family', 'cleanupReceipt']);
-    if (item.format !== DELEGATED_NATIVE_PROFILE_FORMAT || !familyUuid(item.revision) || item.name !== delegatedNativeName(expectedName)) return familyFail();
-    const deployment = parseDelegatedLoginDeployment(item.deployment), attempt = item.attempt === null ? null : delegatedNativeAttempt(item.attempt, deployment);
+    if (![DELEGATED_NATIVE_PROFILE_FORMAT, DELEGATED_NATIVE_FENCED_PROFILE_FORMAT].includes(item.format as string)
+      || !familyUuid(item.revision) || item.name !== delegatedNativeName(expectedName)) return familyFail();
+    const deployment = parseDelegatedLoginDeployment(item.deployment);
+    const fenced = item.format === DELEGATED_NATIVE_FENCED_PROFILE_FORMAT;
+    if (fenced !== (deployment.recoveryProtocol === 'negative-fence-v1')) return familyFail();
+    const attempt = item.attempt === null ? null : delegatedNativeAttempt(item.attempt, deployment);
     let initial: DelegatedNativeInitial | null = null;
     if (item.initial !== null) {
       const data = familyObject(item.initial, ['grantId', 'familyId', 'resource', 'scopes', 'reference']);
@@ -91,8 +115,10 @@ export function decodeDelegatedNativeProfile(value: unknown, expectedName: strin
         || key.clientId !== deployment.client.clientId || key.familyId !== initial.familyId || !familyUuid(data.revision)) return familyFail();
       family = Object.freeze({ key, revision: data.revision });
     }
-    const cleanupReceipt = item.cleanupReceipt === null ? null : delegatedNativeCleanupReceipt(item.cleanupReceipt, attempt?.attemptId ?? '');
-    if (cleanupReceipt && initial && (cleanupReceipt.grantId !== initial.grantId || cleanupReceipt.familyId !== initial.familyId)) return familyFail();
+    const cleanupReceipt = item.cleanupReceipt === null ? null : delegatedNativeCleanupReceipt(item.cleanupReceipt, attempt?.attemptId ?? '', fenced);
+    if (cleanupReceipt && isDelegatedNativeFenceReceipt(cleanupReceipt)) {
+      if (!fenced || attempt?.recoveryProtocol !== 'negative-fence-v1' || initial !== null || family !== null) return familyFail();
+    } else if (cleanupReceipt && initial && (cleanupReceipt.grantId !== initial.grantId || cleanupReceipt.familyId !== initial.familyId)) return familyFail();
     const pendingProof = !!attempt?.proof, pendingInitial = !!initial?.reference;
     const valid = item.state === 'reserved' ? attempt === null && initial === null && family === null && cleanupReceipt === null
       : item.state === 'proof-intent' || item.state === 'proof-ready' ? pendingProof && initial === null && family === null && cleanupReceipt === null
@@ -104,7 +130,7 @@ export function decodeDelegatedNativeProfile(value: unknown, expectedName: strin
                   || !!attempt && !pendingProof && !pendingInitial
                     && (cleanupReceipt !== null && family === null || cleanupReceipt === null && family !== null && initial !== null) : false;
     if (!valid) return familyFail();
-    const result = Object.freeze({ format: DELEGATED_NATIVE_PROFILE_FORMAT, revision: item.revision, name: item.name as string,
+    const result: DelegatedNativeProfileRecord = Object.freeze({ format: item.format as DelegatedNativeProfileRecord['format'], revision: item.revision, name: item.name as string,
       deployment, state: item.state as DelegatedNativeProfileState, attempt, initial, family, cleanupReceipt });
     if (Buffer.byteLength(JSON.stringify(result)) > DELEGATED_NATIVE_MAX_RECORD_BYTES) return familyFail();
     return result;
@@ -132,5 +158,6 @@ export function recoverDelegatedNativeBinding(record: DelegatedNativeProfileReco
   if (!record.attempt) return familyFail('pending', true);
   return Object.freeze({ attemptId: record.attempt.attemptId, ...proof, issuer: record.deployment.issuer,
     clientId: record.deployment.client.clientId, redirectUri: record.attempt.redirectUri, resource: record.attempt.resource,
-    grantResources: record.attempt.grantResources, scopes: record.attempt.scopes as DelegatedLoginRecoveryBinding['scopes'] });
+    grantResources: record.attempt.grantResources, scopes: record.attempt.scopes as DelegatedLoginRecoveryBinding['scopes'],
+    ...record.attempt.recoveryProtocol === 'negative-fence-v1' ? { recoveryProtocol: record.attempt.recoveryProtocol } as const : {} });
 }
