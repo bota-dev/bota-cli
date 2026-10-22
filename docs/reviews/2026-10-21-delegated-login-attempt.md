@@ -786,3 +786,41 @@ historical evidence at their exact sources. An updated actual HTTP/PostgreSQL/
 canonical-native v2 instrument is prepared but has not run at this checkpoint.
 No registry publication, endpoint activation, live Platform grant or browser
 interaction is established by this source/package receipt.
+
+### Combined native v2 qualification
+
+The later v2 instrument passes all 18 scenarios on each pinned runtime at
+CLI82a790130999e018d4f5d7003cea93568d45725f and the frozen backend candidate
+over05f590451e8c22e0dc364cd4332db87b96fede36. The original fifteen legacy
+scenarios remain; three new cases use explicit opted-in canonical profiles.
+Before first server registration, a browser-port interruption leaves real native
+proof ready. Actual HTTP/PostgreSQL recovery commits the exact fence, passes its
+distinct receipt through the genuine coordinator and removes the owned proof.
+Reopen confirms removed state. Delayed delivery of the original URL returns503
+with no request, history, grant or token creation. Registered opted-in enrollment
+and interruption instead retain history and use their existing registered path.
+
+Each lane uses six genuine canonical native profiles and finishes all six
+removed, with tombstones/journals/leasefiles retained. All callbacks, HTTP/SDK,
+native owners, SQL/acquisitions and pools join. Exact owned schema OID/run-marker
+checks precede successful schema removal; all six baseline schemas, including
+the separately retained failed SQL fixture, remain intact. No enumeration,
+API-key root, existing ACL change or unknown-state cleanup occurs.
+
+Receipts are SHA-256
+`30884942c6a29421a93f3453845ca63dc1104e3b7a0a9b366c3ce5150005e272`
+(Node24) and
+`9e50bde89c1ee9b94859e9258846754df5a759812140cf4e838eb7a7b02ae35d`
+(Node22). Both preserve all76 runtime-source and50,290 full installed-dependency
+bindings. Independent read-only graph/install/log/journal/component checking
+passes, SHA-256 `4d4b1c39defa062e09b0e78d93b1306176e45a0c42ca39c71892a5590bb35405`.
+Its initial checker fails to parse ANSI-decorated summary text; that checker and
+empty v1 output remain preserved. A separate r2 normalizes only a summary copy;
+actual workloads and raw logs are not rerun or rewritten.
+
+Cognito/Amplify account ports, the exact logical-HTTPS-to-plaintext-loopback
+proxy, enum-only unused service aliases and fixture device SQL remain controlled.
+This is neither actual browser/SSO/TLS nor the full private application, installed
+CLI/publication, fresh cross-process/crash qualification or live Platform login.
+The deployment resolver remains configuration-off. CLI source CI39853366259
+passes; complete configured/deployed acceptance remains open.
