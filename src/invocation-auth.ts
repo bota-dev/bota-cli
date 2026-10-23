@@ -8,6 +8,7 @@ import { hasDelegatedInvocation, refuseDelegatedCompatibility } from './delegate
 import { developerProfileService } from './developer-profile-production.js';
 import type { DeveloperProfileService } from './developer-profile-service.js';
 import { DeveloperProfileError } from './developer-profile-error.js';
+import { captureDeveloperDeploymentSelection } from './developer-deployment-selection.js';
 
 /** Explicit native selection wraps the complete action, including its cleanup.
  * There is no preAction/postAction lock handoff or saved default selection. */
@@ -73,8 +74,9 @@ export const createMcpRequestAuth = bindMcpRequestAuth({ inspect: inspectSecureP
  * opens its own protected runtime and exact-resource current admission. */
 export function bindDeveloperMcpRequestAuth(service: Pick<DeveloperProfileService, 'pin' | 'run'>) {
   return async (name: string, signal?: AbortSignal): Promise<RequestAuth> => {
+    const inSelection = captureDeveloperDeploymentSelection();
     const expected = await service.pin(name, { signal, timeoutMs: 30_000 });
-    return (signal, action) => service.run(name, 'mcp', action, { signal, timeoutMs: 30_000 }, expected);
+    return (signal, action) => inSelection(() => service.run(name, 'mcp', action, { signal, timeoutMs: 30_000 }, expected));
   };
 }
 export const createDeveloperMcpRequestAuth = bindDeveloperMcpRequestAuth(developerProfileService);

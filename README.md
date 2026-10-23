@@ -54,33 +54,37 @@ environment injection or secure API-key profiles until Platform enrollment is
 qualified. The [Platform session guide](docs/platform-developer-sessions.md)
 describes the source-preview contract and remaining acceptance gates.
 
-### Platform developer sessions: configuration off
+### Platform developer sessions: explicit DEV selection
 
-The source preview has an explicit `--developer-profile <name>` selector for a
-protected Platform developer session. It is separate from API-key `--profile`
-and `--secure-profile`; mixed selectors or URL overrides refuse. Selection never
-changes a saved default or imports legacy credentials. Source orchestration and
-portable tests do not establish real native custody, production TLS, a completed
-browser consent flow or deployed Platform login. This path remains disabled by
-the build-bound deployment resolver; the public npm version does not include it.
+The source preview accepts `--developer-deployment dev` to select the fixed,
+reviewed DEV client `bota-cli-dev-v1` at `https://api.dev.bota.dev`, with Platform
+consent at `https://platform.dev.bota.dev`. This selects source configuration;
+enabled ingress, a configured Portal build and real account consent remain
+separate acceptance gates. The public npm version does not include this change.
+Without this option, the production deployment resolver remains configuration
+off and refuses before native storage or network access.
 
-When that reviewed deployment cohort is enabled, the intended commands are:
+Always repeat the DEV option for enrollment, use, inspection and recovery. Use
+`--developer-profile <name>` to select a protected session for CLI or local MCP.
+API-key selectors and URL overrides cannot be combined with DEV selection;
+saved metadata, environment variables and custom URLs cannot choose a deployment.
+The source-prepared DEV commands are:
 
 ```bash
-# These source-preview commands currently fail configuration-unavailable.
 # Choose only the required read scopes; repeat --scope to add another.
-bota auth login --name work --scope devices:read
-bota --developer-profile work devices list
-bota --developer-profile work mcp --mode hosted
-bota --developer-profile work auth status --json
-bota auth developer-profiles show work
-bota auth developer-profiles recover work
-bota auth developer-profiles logout work
+bota --developer-deployment dev auth login --name dev-work --scope devices:read
+bota --developer-deployment dev --developer-profile dev-work devices list
+bota --developer-deployment dev --developer-profile dev-work mcp --mode hosted
+bota --developer-deployment dev --developer-profile dev-work auth status --json
+bota --developer-deployment dev auth developer-profiles show dev-work
+bota --developer-deployment dev auth developer-profiles recover dev-work
+bota --developer-deployment dev auth developer-profiles logout dev-work
 ```
 
 `--identity-only` explicitly requests no business-read scopes. Interactive login
 can ask which read scopes to request; noninteractive login must specify them or
-`--identity-only`. Consent and current backend admission determine actual access.
+`--identity-only`. DEV enrollment requests both REST and MCP resource audiences
+for the shared session. Consent and current backend admission determine actual access.
 Local MCP requires explicit `--mode hosted` for developer sessions. Stdio MCP
 never prompts or opens a login flow. A shared family lease serializes selected
 CLI/MCP operations and refresh; unknown refresh/revocation outcomes preserve the

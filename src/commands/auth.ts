@@ -22,7 +22,7 @@ export function registerAuth(program: Command, developer: DeveloperProfileServic
     .action(async (key: string | undefined, options: { name: string; scope: string[]; identityOnly?: boolean }) => {
       const globalOpts = program.opts();
       if (key) {
-        if (globalOpts['developerProfile'] !== undefined || options.name !== 'default' || options.scope.length || options.identityOnly) throw new DeveloperProfileError('developer_profile_invalid');
+        if (globalOpts['developerProfile'] !== undefined || globalOpts['developerDeployment'] !== undefined || options.name !== 'default' || options.scope.length || options.identityOnly) throw new DeveloperProfileError('developer_profile_invalid');
         const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
         // Headless / CI path: accept key directly
         if (!key.startsWith('sk_live_') && !key.startsWith('sk_test_')) {
@@ -47,7 +47,8 @@ export function registerAuth(program: Command, developer: DeveloperProfileServic
           grantResourceKinds: deployment.client.resourceKinds, scopes,
           loopbackHost: deployment.client.redirectUris.includes('http://127.0.0.1/oauth/callback') ? '127.0.0.1' : '::1' }, { signal });
         await publishDeveloperMetadata(developerProfileProjection(profile), signal, write);
-        if (!globalOpts['json']) { await write('stderr', `Select this session with --developer-profile ${profile.name}. Revoke it with: bota auth developer-profiles logout ${profile.name}\n`);
+        if (!globalOpts['json']) { const deploymentOption = globalOpts['developerDeployment'] === 'dev' ? '--developer-deployment dev ' : '';
+          await write('stderr', `Select this session with ${deploymentOption}--developer-profile ${profile.name}. Revoke it with: bota ${deploymentOption}auth developer-profiles logout ${profile.name}\n`);
           if (signal.aborted) throw new DeveloperProfileError('developer_cancelled'); }
       });
     });

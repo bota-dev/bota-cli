@@ -1,5 +1,5 @@
 import open from 'open';
-import { getProductionDeveloperDeployment } from './delegated-production-deployment.js';
+import { getSelectedDeveloperDeployment } from './developer-deployment-selection.js';
 import { createWindowsDelegatedNativeRuntime } from './delegated-native-runtime.js';
 import { createDeveloperProfileServiceForTrustedPorts } from './developer-profile-service.js';
 import { DeveloperProfileError } from './developer-profile-error.js';
@@ -23,7 +23,7 @@ export async function writeDeveloperCommandOutput(channel: 'stdout' | 'stderr', 
 /** Factory construction performs no filesystem/OS, browser or network action.
  * Every operation resolves trusted build configuration before native startup. */
 export const developerProfileService = createDeveloperProfileServiceForTrustedPorts({
-  getDeployment: getProductionDeveloperDeployment,
+  getDeployment: getSelectedDeveloperDeployment,
   createRuntime: createWindowsDelegatedNativeRuntime,
   fetch: nativeFetch,
   async openBrowser(url, context) {

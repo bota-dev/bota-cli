@@ -1,10 +1,12 @@
 # Platform developer sessions
 
-This is the source-preview command contract. Production Platform login is
-**configuration off**: `getProductionDeveloperDeployment()` refuses with
+This is the source-preview command contract. Default production Platform login
+remains **configuration off**: `getProductionDeveloperDeployment()` refuses with
 `developer_configuration_unavailable` before opening native storage, a callback
-listener, browser or network request. No command, environment variable or saved
-profile can supply deployment endpoints. The candidate CLI is unpublished;
+listener, browser or network request. Explicit `--developer-deployment dev`
+selects the fixed reviewed DEV configuration through the actual service and
+protected native factory. No argument, environment variable or saved profile can
+supply arbitrary deployment endpoints. The candidate CLI is unpublished;
 historical public npm `0.1.0` does not provide this workflow.
 
 The implementation separates a Platform user's delegated session from project
@@ -15,9 +17,20 @@ The design and component evidence live in the
 
 ## Enrollment and selection
 
-A reviewed build must contain the exact trusted issuer, registered native CLI
-client, authorization/token/revocation endpoints, resource audiences and literal
-loopback redirect templates. The source coordinator performs these steps:
+The DEV selection is pinned to backend candidate
+[`551927a1`](https://github.com/bota-dev/bota/blob/551927a19f751fa20a1b420aaa5a5bffa4f2128b/infra/config/developer-auth-dev.candidate.json):
+issuer `https://api.dev.bota.dev`, native client `bota-cli-dev-v1`, authorization,
+token and revocation paths `/oauth/authorize`, `/oauth/token` and `/oauth/revoke`,
+REST audience `https://api.dev.bota.dev/v1`, and MCP audience
+`https://api.dev.bota.dev/mcp`. The registered literal callback templates are
+`http://127.0.0.1/oauth/callback` and `http://[::1]/oauth/callback`; the owned
+listener binds an ephemeral port with S256 PKCE. Both resource audiences are
+requested for the shared grant. The server sends consent to the configured
+`https://platform.dev.bota.dev` Portal. DEV explicitly opts into
+`negative-fence-v1` recovery.
+
+This source selection does not prove active deployment, Portal configuration or
+real account consent. The actual coordinator performs these steps:
 
 1. Reserve a new explicit local name. Existing names and removed reservations
    refuse; enrollment never silently replaces them.
@@ -32,15 +45,15 @@ loopback redirect templates. The source coordinator performs these steps:
    family and finish journaled local adoption. Join callback/native cleanup
    before reporting success.
 
-These commands illustrate the intended configured workflow and currently refuse
-at step zero:
+These are the source-prepared DEV commands. Repeat the fixed DEV selector for
+every invocation; omitting it still refuses production configuration at step zero:
 
 ```bash
-bota auth login --name work --scope devices:read --scope recordings:read
-bota --developer-profile work devices list
-bota --developer-profile work recordings list
-bota --developer-profile work auth status --json
-bota --developer-profile work mcp --mode hosted
+bota --developer-deployment dev auth login --name dev-work --scope devices:read --scope recordings:read
+bota --developer-deployment dev --developer-profile dev-work devices list
+bota --developer-deployment dev --developer-profile dev-work recordings list
+bota --developer-deployment dev --developer-profile dev-work auth status --json
+bota --developer-deployment dev --developer-profile dev-work mcp --mode hosted
 ```
 
 The available read scope names are `end_users:read`, `devices:read`,
@@ -53,9 +66,13 @@ admission remain authoritative.
 Omitting `--name` reserves `default`; it does not select that name for future
 commands. Always pass `--developer-profile` when using a delegated session. Do
 not combine it with `--profile`, `--secure-profile`, `--api-url` or
-`--dashboard-url`. API-key environment variables cannot substitute for a
+`--dashboard-url`; those options also conflict with `--developer-deployment dev`.
+The DEV selector cannot be used for API-key login or unrelated commands.
+API-key environment variables cannot substitute for a
 selected delegated session. Endpoint authority comes only from reviewed source
-configuration and must match saved metadata exactly.
+configuration and must match saved metadata exactly. The selection is captured
+once for the entire command lifetime, including a hosted-mode local MCP process;
+it neither changes a saved default nor imports legacy credentials.
 
 ## Shared CLI and local MCP access
 
@@ -82,12 +99,12 @@ CLI reads currently refuse responses above 1MiB; identity bodies are bounded at
 ## Recovery, logout and retained state
 
 ```bash
-bota auth developer-profiles list --json
-bota auth developer-profiles show work
-bota auth developer-profiles recover work
-bota auth developer-profiles logout work
+bota --developer-deployment dev auth developer-profiles list --json
+bota --developer-deployment dev auth developer-profiles show dev-work
+bota --developer-deployment dev auth developer-profiles recover dev-work
+bota --developer-deployment dev auth developer-profiles logout dev-work
 # The explicitly selected equivalent:
-bota --developer-profile work auth logout
+bota --developer-deployment dev --developer-profile dev-work auth logout
 ```
 
 Metadata output contains safe name, state and deployment information; it never
@@ -150,7 +167,9 @@ Linux startup metadata paths and the instrument's own report write are allowed.
 These tripwires cover the current bootstrap seams; they are not an adversarial
 sandbox or evidence of a configured native login. The preload is not shipped.
 
-Activation requires the reviewed native source/runtime cohort, exact trusted
+Real acceptance requires the reviewed native source/runtime cohort, exact trusted
 server/client configuration, deployed ingress/Portal/resource acceptance and a
-real Platform-account end-to-end receipt. Until those checks pass, configuration
-refusal is the expected product behavior.
+real Platform-account end-to-end receipt. DEV source selection does not complete
+these checks or activate cloud resources. Default production configuration stays
+off. The existing guarded installed consumer checks that unchanged default path;
+it does not qualify configured DEV native bootstrap or a live login.

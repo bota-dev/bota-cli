@@ -19,7 +19,7 @@ function setup(writer = async (channel, text) => { (channel === 'stdout' ? conso
   async status(name, options) { calls.push({ op: 'status', name, options }); return { profile: name, credential_type: 'developer_delegation', projectId: 'proj_fixture' }; },
   async run(name, kind, action, options, expected) { calls.push({ op: 'run', name, kind, options, expected }); return action(); },
   async pin(name, options) { calls.push({ op: 'pin', name, options }); return profile.familyKey; } };
-  const program = new Command().exitOverride().option('--developer-profile <name>').option('--profile <name>').option('--secure-profile <name>').option('--api-url <url>').option('--dashboard-url <url>').option('--json');
+  const program = new Command().exitOverride().option('--developer-profile <name>').option('--developer-deployment <name>').option('--profile <name>').option('--secure-profile <name>').option('--api-url <url>').option('--dashboard-url <url>').option('--json');
   const auth = registerAuth(program, service, writer); registerDeveloperProfiles(auth, program, service, writer); return { program, calls, service }; }
 async function silence(work) { const original = console.log, errors = console.error, output = [], stderr = [];
   console.log = value => output.push(value); console.error = value => stderr.push(value);
@@ -35,6 +35,21 @@ test('missing production config is checked before any interactive scope prompt',
   const f = setup(); f.service.configuration = () => { throw new DeveloperProfileError('developer_configuration_unavailable'); };
   await assert.rejects(f.program.parseAsync(['node', 'bota', 'auth', 'login']), refused('developer_configuration_unavailable'));
   assert.equal(f.calls.length, 0);
+});
+
+test('DEV login guidance retains the explicit deployment for future selection and logout', async () => {
+  const output = [], f = setup(async (channel, text) => output.push({ channel, text }));
+  await f.program.parseAsync(['node', 'bota', '--developer-deployment', 'dev', 'auth', 'login', '--name', 'work', '--identity-only']);
+  const guidance = output.find(value => value.channel === 'stderr').text;
+  assert.match(guidance, /--developer-deployment dev --developer-profile work/);
+  assert.match(guidance, /bota --developer-deployment dev auth developer-profiles logout work/);
+  assert.deepEqual(f.calls.find(value => value.op === 'login').selection.grantResourceKinds, ['rest', 'mcp']);
+});
+
+test('legacy key login rejects an explicit developer deployment before config writes', async () => {
+  const f = setup();
+  await assert.rejects(f.program.parseAsync(['node', 'bota', '--developer-deployment', 'dev', 'auth', 'login', 'PRIVATE_CANARY']), refused('developer_profile_invalid'));
+  assert.deepEqual(f.calls, []);
 });
 test('scope choice is explicit, bounded and never accepts arbitrary secret-looking input', async () => {
   const signal = new AbortController().signal;

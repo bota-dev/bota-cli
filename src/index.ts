@@ -19,6 +19,7 @@ import * as secureProfileService from './secure-profiles.js';
 import { registerDeveloperProfiles } from './commands/developer-profiles.js';
 import { developerProfileService } from './developer-profile-production.js';
 import { DeveloperProfileError } from './developer-profile-error.js';
+import { validateDeveloperDeploymentCommand, withDeveloperDeploymentSelection } from './developer-deployment-selection.js';
 
 const program = new Command();
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
@@ -32,6 +33,7 @@ program
   .option('--profile <name>', 'Explicit environment-only profile; verify its origin/project before cloud operations')
   .option('--secure-profile <name>', 'Explicit OS-stored project profile; verify current credentials for every action or MCP request')
   .option('--developer-profile <name>', 'Explicit protected Platform developer session shared by CLI and hosted-mode local MCP')
+  .option('--developer-deployment <name>', 'Explicit source-owned developer deployment: dev; production remains configuration off')
   .option('--json', 'Output raw JSON');
 
 const auth = registerAuth(program);
@@ -48,6 +50,7 @@ registerMcp(program);
 registerIntegrations(program);
 
 program.hook('preAction', async (_command, action) => {
+  validateDeveloperDeploymentCommand(program, action);
   const options = program.opts();
   const secure = options['secureProfile'] !== undefined;
   const developer = options['developerProfile'] !== undefined;
@@ -79,11 +82,12 @@ program.hook('preAction', async (_command, action) => {
   setProfileContext(context);
 });
 
-const developerArguments = process.argv.some(value => value === 'developer-profiles' || value === '--developer-profile' || value.startsWith('--developer-profile='))
+const developerArguments = process.argv.some(value => value === 'developer-profiles' || value === '--developer-profile' || value.startsWith('--developer-profile=')
+  || value === '--developer-deployment' || value.startsWith('--developer-deployment='))
   || process.argv.includes('auth') && process.argv.includes('login');
 const privateArguments = developerArguments || process.argv.some(value => value === 'secure-profiles' || value === '--secure-profile' || value.startsWith('--secure-profile='));
 if (privateArguments) program.configureOutput({ outputError: () => printError(developerArguments ? new DeveloperProfileError('developer_profile_invalid') : new SecureProfileCommandError('invalid_secure_profile_command'), Boolean(program.opts()['json'])) });
-program.parseAsync(process.argv).catch((e: unknown) => {
+withDeveloperDeploymentSelection(() => program.opts()['developerDeployment'], () => program.parseAsync(process.argv)).catch((e: unknown) => {
   if (privateArguments && e && typeof e === 'object' && 'code' in e && typeof e.code === 'string' && e.code.startsWith('commander.')) {
     e = developerArguments ? new DeveloperProfileError('developer_profile_invalid') : new SecureProfileCommandError('invalid_secure_profile_command');
   }
