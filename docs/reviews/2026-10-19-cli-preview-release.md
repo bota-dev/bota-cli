@@ -2,7 +2,7 @@
 
 Date: October 19, 2026. Scope: T01 packaging qualification for
 `@bota.dev/cli@0.2.0-beta.0`, starting from functional source `25dca4e`.
-The owner-approved [implementation track](../../../internal-docs/plans/2026-10-18-developer-toolchain-implementation.md#52-remaining-execution-backlog)
+The owner-approved [implementation initiative](https://github.com/bota-dev/bota/issues/401)
 owns cross-repository/backend/docs delivery. Root owns source commit/push.
 
 **This is a prepared candidate, not a published release.** The owner explicitly
