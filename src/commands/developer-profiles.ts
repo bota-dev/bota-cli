@@ -7,6 +7,7 @@ import type { DeveloperProfileService } from '../developer-profile-service.js';
 import { DeveloperProfileError, developerProfileFailure, sanitizeDeveloperProfileError } from '../developer-profile-error.js';
 import { printError } from '../output.js';
 import { writeDeveloperCommandOutput } from '../developer-profile-production.js';
+import { acknowledgeDeveloperOutput } from '../developer-output-acknowledgement.js';
 
 export type DeveloperMetadataWriter = (channel: 'stdout' | 'stderr', text: string) => Promise<void>;
 
@@ -19,18 +20,25 @@ export function developerProfileProjection(profile: DelegatedNativeProfile): Rec
     issuer: profile.deployment.issuer, client_id: profile.deployment.client.clientId,
     resources: profile.deployment.resources, recovery_required: !['ready', 'removed'].includes(profile.state) };
 }
-/** Metadata is published only after the service has joined native cleanup.
- * Keep the command owner live until native stdout/stderr completion too. */
-export async function publishDeveloperMetadata(value: unknown, signal: AbortSignal, write: DeveloperMetadataWriter,
+/** Service cleanup must join before publication. Acknowledgement is bounded;
+ * withdrawal cannot retract public bytes already queued to native stdio. */
+export async function publishDeveloperText(channel: 'stdout' | 'stderr', text: string, signal: AbortSignal, write: DeveloperMetadataWriter,
   expiry?: number): Promise<void> {
   const check = () => {
     if (signal.aborted) throw new DeveloperProfileError('developer_cancelled');
     if (expiry !== undefined && Math.floor(Date.now() / 1000) >= expiry) throw new DeveloperProfileError('developer_deadline');
   };
   check();
-  try { await write('stdout', safeDeveloperJson(value) + '\n'); }
-  catch (error) { check(); throw sanitizeDeveloperProfileError(error, false, true); }
-  check();
+  try { await acknowledgeDeveloperOutput(channel, text, write, check, signal); check(); }
+  catch (error) {
+    try { check(); }
+    catch (guard) { throw sanitizeDeveloperProfileError(guard, developerProfileFailure(error)?.recovery_required === true, true); }
+    throw sanitizeDeveloperProfileError(error, false, true);
+  }
+}
+export async function publishDeveloperMetadata(value: unknown, signal: AbortSignal, write: DeveloperMetadataWriter,
+  expiry?: number): Promise<void> {
+  await publishDeveloperText('stdout', safeDeveloperJson(value) + '\n', signal, write, expiry);
 }
 export async function developerCommandBoundary(work: (signal: AbortSignal) => Promise<void>): Promise<void> {
   const controller = new AbortController(); let interrupt: number | undefined;

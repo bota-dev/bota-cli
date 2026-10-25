@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { types } from 'node:util';
 import { DeveloperProfileError } from './developer-profile-error.js';
+import { acknowledgeDeveloperOutput } from './developer-output-acknowledgement.js';
 
 type Channel = 'stdout' | 'stderr';
 interface Entry { readonly channel: Channel; readonly text: string }
@@ -22,7 +23,7 @@ export interface CapturedDeveloperOutput<T> {
   readonly value: T;
   /** Invoke only after action, family lease and runtime cleanup have joined.
    * The original invocation guard must remain live through publication. */
-  publish(check: () => void, write: (channel: Channel, text: string) => Promise<void>): Promise<void>;
+  publish(check: () => void, write: (channel: Channel, text: string) => Promise<void>, signal?: AbortSignal): Promise<void>;
 }
 export async function bufferDeveloperCommandOutput<T>(action: () => Promise<T>, maximumBytes: number): Promise<CapturedDeveloperOutput<T>> {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 64 * 1024 * 1024
@@ -34,12 +35,12 @@ export async function bufferDeveloperCommandOutput<T>(action: () => Promise<T>, 
   finally { scope.live = false; }
   let claimed = false;
   return Object.freeze({ value,
-    async publish(check: () => void, write: (channel: Channel, text: string) => Promise<void>): Promise<void> {
+    async publish(check: () => void, write: (channel: Channel, text: string) => Promise<void>, signal?: AbortSignal): Promise<void> {
       if (claimed || typeof check !== 'function' || types.isProxy(check) || typeof write !== 'function' || types.isProxy(write)) fail();
       claimed = true;
       try {
         check();
-        for (const entry of scope.entries) { check(); await write(entry.channel, entry.text); check(); }
+        for (const entry of scope.entries) { check(); await acknowledgeDeveloperOutput(entry.channel, entry.text, write, check, signal); check(); }
         check();
       } catch { fail(); }
       finally { scope.entries.length = 0; scope.bytes = 0; }

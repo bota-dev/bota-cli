@@ -82,7 +82,7 @@ export function createDeveloperProfileServiceForTrustedPorts(input: DeveloperPro
     context: DelegatedFamilyContext; deployment: DelegatedLoginDeployment; runtime: DelegatedNativeRuntime;
     markEffect(): void; selected(name: string): Promise<DelegatedNativeProfile>;
     engine(name: string): { engine: DelegatedFamilyEngine; http: ReturnType<typeof createDelegatedHttpAdapterForTrustedPorts> };
-  }) => Promise<T>, afterClose?: (result: T, check: () => void) => Promise<void>, beforeNative?: (deployment: DelegatedLoginDeployment) => void): Promise<T> {
+  }) => Promise<T>, afterClose?: (result: T, check: () => void, signal: AbortSignal) => Promise<void>, beforeNative?: (deployment: DelegatedLoginDeployment) => void): Promise<T> {
     const values = familyObject(options, [], ['signal', 'timeoutMs']);
     const parent = values.signal as AbortSignal | undefined;
     if (parent !== undefined) try { if (types.isProxy(parent)) fail('developer_profile_invalid'); aborted.call(parent); } catch { fail('developer_profile_invalid'); }
@@ -128,7 +128,7 @@ export function createDeveloperProfileServiceForTrustedPorts(input: DeveloperPro
       catch { runtime = undefined; failed = true; failure = new DeveloperProfileError('developer_recovery_required', true, effect); }
       check();
       if (failed) throw failure;
-      if (afterClose) try { await afterClose(result as T, check); }
+      if (afterClose) try { await afterClose(result as T, check, context.signal); }
       catch (error) { check(); throw error; }
       check(); return result as T;
     } catch (error) { throw safeFailure(error, effect); }
@@ -200,7 +200,7 @@ export function createDeveloperProfileServiceForTrustedPorts(input: DeveloperPro
         const binding = await bindDelegatedInvocationForTrustedPorts(engine, key, state.deployment, state.context, { fetch: ports.fetch });
         return binding.run(kind, state.context, () => kind === 'rest' ? bufferDeveloperCommandOutput(action, maximumOutput)
           : action().then(value => ({ value, publish: async () => {} })));
-      }, async (result, check) => result.publish(check, ports.writeOutput));
+      }, async (result, check, signal) => result.publish(check, ports.writeOutput, signal));
       return captured.value;
     },
     pin(nameInput: string, options: DeveloperProfileOptions = {}) { const name = nameOf(nameInput); return operation(options, async state => keyFor(await state.selected(name))); },
