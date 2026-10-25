@@ -397,6 +397,10 @@ npm run license-check
 npm run verify:package
 ```
 
+The test runner executes up to two isolated test files concurrently. Tests within
+each file retain their existing ordering, including real timeout, cancellation
+and signal-relay checks. Fixtures use separate temporary homes and loopback ports.
+
 `verify:package` creates a tarball and receipt under `.release/`, resolves an
 isolated consumer lock, and installs it with `npm ci --ignore-scripts`. It runs
 the installed command's version/help, hosted-mode help, legacy identity read,
