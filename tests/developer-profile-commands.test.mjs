@@ -83,6 +83,41 @@ test('status metadata publication rechecks authoritative expiry after joined out
   try { await assert.rejects(publishDeveloperMetadata({ expiresAtSeconds: expiry }, signal, async () => { Date.now = () => expiry * 1000; }, expiry), refused('developer_deadline')); }
   finally { Date.now = original; }
 });
+
+test('pending metadata acknowledgement cancels without publishing success after a late callback', async () => {
+  const controller = new AbortController(); let enter, release, ready = false;
+  const entered = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const running = publishDeveloperMetadata({ state: 'ready' }, controller.signal, async () => { enter(); await held; }).then(() => { ready = true; });
+  void running.catch(() => {}); await entered; controller.abort('PRIVATE_REASON');
+  await assert.rejects(running, error => { refused('developer_cancelled')(error);
+    assert.equal(developerProfileFailure(error).operation_may_have_executed, true); return true; });
+  release(); await new Promise(resolve => setImmediate(resolve)); assert.equal(ready, false);
+});
+
+test('authoritative metadata expiry withdraws a stalled acknowledgement before its late return', async () => {
+  const original = Date.now, expiry = Math.floor(original() / 1000) + 10; let enter, release;
+  const entered = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const running = publishDeveloperMetadata({ expiresAtSeconds: expiry }, new AbortController().signal, async () => { enter(); await held; }, expiry);
+  void running.catch(() => {});
+  try { await entered; Date.now = () => expiry * 1000; await assert.rejects(running, error => {
+    refused('developer_deadline')(error); assert.equal(developerProfileFailure(error).operation_may_have_executed, true); return true;
+  }); }
+  finally { Date.now = original; release(); }
+});
+
+test('login guidance acknowledgement cannot outlive cancellation or trigger another enrollment', async () => {
+  const previous = process.exitCode; let enter, release, ready = false;
+  const entered = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const output = [], f = setup(async (channel, text) => { output.push({ channel, text }); if (channel === 'stderr') { enter(); await held; } });
+  const running = f.program.parseAsync(['node', 'bota', 'auth', 'login', '--name', 'work', '--identity-only']).then(() => { ready = true; });
+  void running.catch(() => {});
+  try {
+    await entered; process.emit('SIGINT'); await assert.rejects(running, error => { refused('developer_cancelled')(error);
+      assert.equal(developerProfileFailure(error).operation_may_have_executed, true); return true; });
+    release(); await new Promise(resolve => setImmediate(resolve)); assert.equal(ready, false); assert.equal(process.exitCode, 130);
+    assert.equal(f.calls.filter(value => value.op === 'login').length, 1); assert.equal(output.length, 2);
+  } finally { process.exitCode = previous; release(); }
+});
 test('CLI wrapper selects the REST service without consulting an API-key profile', async () => {
   const f = setup(); f.program.parseOptions(['--developer-profile', 'work']);
   assert.equal(await withCommandAuth(f.program, async value => value + 1, f.service)(4), 5);

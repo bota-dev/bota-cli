@@ -89,9 +89,23 @@ same canonical family namespace. Unknown rotation suspends the whole family;
 cached access cannot bypass it. Operations are not automatically replayed.
 
 Ordinary selected CLI output is buffered until the action, family lease and
-native runtime cleanup join. The live invocation and authoritative access expiry
-are checked through joined output writes; later chunks are withdrawn if authority
-expires. A completed earlier write cannot be recalled. MCP protocol traffic has
+native runtime cleanup join. For asynchronous writers, each output acknowledgement
+has a five-second ceiling. Buffered ordinary output also remains subject to the
+original invocation cancellation, deadline and authoritative access expiry. A stalled acknowledgement refuses;
+late completion cannot return command success or start another buffered chunk.
+Metadata and login guidance use that ceiling and the command's cancellation;
+status metadata also checks its authoritative expiry. Already queued
+bytes cannot be recalled, and a nonzero exit never qualifies a preceding ready
+record. Output uncertainty does not delete retained proofs or journals, revoke a
+family or repeat enrollment; inspect the explicit profile before choosing recovery.
+
+JavaScript timers cannot interrupt a synchronously blocked native write. Node
+uses synchronous process pipes on Windows and synchronous regular-file output on
+all platforms; those paths have no bounded-wait guarantee here. Pending native
+writes keep their error observers until their callbacks and deferred errors are
+observed. The CLI does not destroy global stdout/stderr or force-close their file
+descriptors, and this boundary does not promise bounded process exit while native
+output remains blocked. MCP protocol traffic has
 its own request/transport owner and is not globally buffered. Ordinary delegated
 CLI reads currently refuse responses above 1MiB; identity bodies are bounded at
 16KiB. This cohort does not promise unrestricted large-transcript parity.

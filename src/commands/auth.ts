@@ -6,7 +6,7 @@ import { withCommandAuth } from '../invocation-auth.js';
 import { developerProfileService, writeDeveloperCommandOutput } from '../developer-profile-production.js';
 import type { DeveloperProfileService } from '../developer-profile-service.js';
 import { DeveloperProfileError } from '../developer-profile-error.js';
-import { chooseDeveloperScopes, developerCommandBoundary, developerProfileProjection, publishDeveloperMetadata, type DeveloperMetadataWriter } from './developer-profiles.js';
+import { chooseDeveloperScopes, developerCommandBoundary, developerProfileProjection, publishDeveloperMetadata, publishDeveloperText, type DeveloperMetadataWriter } from './developer-profiles.js';
 
 export function registerAuth(program: Command, developer: DeveloperProfileService = developerProfileService,
   write: DeveloperMetadataWriter = writeDeveloperCommandOutput): Command {
@@ -48,8 +48,7 @@ export function registerAuth(program: Command, developer: DeveloperProfileServic
           loopbackHost: deployment.client.redirectUris.includes('http://127.0.0.1/oauth/callback') ? '127.0.0.1' : '::1' }, { signal });
         await publishDeveloperMetadata(developerProfileProjection(profile), signal, write);
         if (!globalOpts['json']) { const deploymentOption = globalOpts['developerDeployment'] === 'dev' ? '--developer-deployment dev ' : '';
-          await write('stderr', `Select this session with ${deploymentOption}--developer-profile ${profile.name}. Revoke it with: bota ${deploymentOption}auth developer-profiles logout ${profile.name}\n`);
-          if (signal.aborted) throw new DeveloperProfileError('developer_cancelled'); }
+          await publishDeveloperText('stderr', `Select this session with ${deploymentOption}--developer-profile ${profile.name}. Revoke it with: bota ${deploymentOption}auth developer-profiles logout ${profile.name}\n`, signal, write); }
       });
     });
 

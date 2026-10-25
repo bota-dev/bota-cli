@@ -157,6 +157,34 @@ test('expiry during a joined output write withdraws later buffered chunks', asyn
   finally { Date.now = original; }
   assert.equal(f.output.length, 1); assert.deepEqual(JSON.parse(f.output[0].text), { first: true }); assert.equal(f.context.signal.aborted, true);
 });
+
+test('cancellation of a stalled output acknowledgement preserves family state and never resumes later chunks', async () => {
+  const f = await fixture(), entered = defer(), release = defer(), parent = new AbortController();
+  f.onWrite = async () => { entered.resolve(); await release.promise; };
+  const running = f.service.run('work', 'rest', async () => { printJson({ first: true }); printJson({ second: true }); return 'must-not-return'; }, { signal: parent.signal });
+  void running.catch(() => {}); await entered.promise;
+  assert.equal(f.held, 0); assert.equal(f.closes, 1);
+  const saved = JSON.stringify({ profile: f.profile, snapshots: [...f.snapshots], secrets: [...f.secrets], proofs: [...f.proofs], initial: [...f.initial] });
+  const posts = f.tokenPosts + f.revokePosts;
+  parent.abort('PRIVATE_ABORT');
+  await assert.rejects(running, error => {
+    fixed('developer_cancelled')(error); assert.equal(developerProfileFailure(error).recovery_required, true);
+    assert.equal(developerProfileFailure(error).operation_may_have_executed, true); return true;
+  });
+  assert.equal(f.context.signal.aborted, true); release.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.output.length, 1); assert.equal(f.tokenPosts + f.revokePosts, posts);
+  assert.equal(JSON.stringify({ profile: f.profile, snapshots: [...f.snapshots], secrets: [...f.secrets], proofs: [...f.proofs], initial: [...f.initial] }), saved);
+});
+
+test('the original service deadline refuses a stalled output acknowledgement after cleanup', async () => {
+  const f = await fixture(), entered = defer(), release = defer();
+  f.onWrite = async () => { entered.resolve(); await release.promise; };
+  const running = f.service.run('work', 'rest', async () => { printJson({ first: true }); printJson({ second: true }); }, { timeoutMs: 250 });
+  void running.catch(() => {}); await entered.promise; const posts = f.tokenPosts + f.revokePosts;
+  await assert.rejects(running, fixed('developer_deadline')); assert.equal(f.closes, 1); assert.equal(f.held, 0);
+  release.resolve(); await new Promise(resolve => setImmediate(resolve)); assert.equal(f.output.length, 1);
+  assert.equal(f.profile.state, 'ready'); assert.equal(f.tokenPosts + f.revokePosts, posts);
+});
 test('profile deployment mismatch cannot retarget identity or business transport', async () => {
   const f = await fixture(); f.profile = { ...f.profile, deployment: { ...deployment, issuer: 'https://foreign.example.test' } };
   await assert.rejects(f.service.status('work'), fixed('developer_operation_failed')); assert.equal(f.tokenPosts + f.business, 0); assert.equal(f.closes, 1);

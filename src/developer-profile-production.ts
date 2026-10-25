@@ -3,22 +3,13 @@ import { getSelectedDeveloperDeployment } from './developer-deployment-selection
 import { createWindowsDelegatedNativeRuntime } from './delegated-native-runtime.js';
 import { createDeveloperProfileServiceForTrustedPorts } from './developer-profile-service.js';
 import { DeveloperProfileError } from './developer-profile-error.js';
+import { writeDeveloperWritableOutput } from './developer-output-acknowledgement.js';
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
-/** Native writable completion plus its ordinary deferred error event are joined.
- * No global stdout replacement, endpoint input or credential input is exposed. */
+/** Keep observing native completion even after the caller withdraws its bounded
+ * acknowledgement. No global stream replacement or destruction is performed. */
 export async function writeDeveloperCommandOutput(channel: 'stdout' | 'stderr', text: string): Promise<void> {
-  const stream = channel === 'stdout' ? process.stdout : process.stderr; let failed = false;
-  const failure = () => { failed = true; };
-  stream.on('error', failure);
-  try {
-    await new Promise<void>(resolve => {
-      try { stream.write(text, 'utf8', error => { if (error) failed = true; resolve(); }); }
-      catch { failed = true; resolve(); }
-    });
-    await new Promise<void>(resolve => setImmediate(resolve));
-    if (failed) throw new DeveloperProfileError('developer_output_failed');
-  } finally { stream.removeListener('error', failure); }
+  await writeDeveloperWritableOutput(channel === 'stdout' ? process.stdout : process.stderr, text);
 }
 /** Factory construction performs no filesystem/OS, browser or network action.
  * Every operation resolves trusted build configuration before native startup. */
