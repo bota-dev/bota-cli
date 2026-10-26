@@ -33,7 +33,7 @@ program
   .option('--profile <name>', 'Explicit environment-only profile; verify its origin/project before cloud operations')
   .option('--secure-profile <name>', 'Explicit OS-stored project profile; verify current credentials for every action or MCP request')
   .option('--developer-profile <name>', 'Explicit protected Platform developer session shared by CLI and hosted-mode local MCP')
-  .option('--developer-deployment <name>', 'Explicit source-owned developer deployment: dev; production remains configuration off')
+  .option('--developer-deployment <name>', 'Explicit source-owned developer deployment: dev or prod; omission remains configuration off')
   .option('--json', 'Output raw JSON');
 
 const auth = registerAuth(program);

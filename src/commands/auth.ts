@@ -47,7 +47,8 @@ export function registerAuth(program: Command, developer: DeveloperProfileServic
           grantResourceKinds: deployment.client.resourceKinds, scopes,
           loopbackHost: deployment.client.redirectUris.includes('http://127.0.0.1/oauth/callback') ? '127.0.0.1' : '::1' }, { signal });
         await publishDeveloperMetadata(developerProfileProjection(profile), signal, write);
-        if (!globalOpts['json']) { const deploymentOption = globalOpts['developerDeployment'] === 'dev' ? '--developer-deployment dev ' : '';
+        if (!globalOpts['json']) { const selectedDeployment = globalOpts['developerDeployment'];
+          const deploymentOption = selectedDeployment === 'dev' || selectedDeployment === 'prod' ? `--developer-deployment ${selectedDeployment} ` : '';
           await publishDeveloperText('stderr', `Select this session with ${deploymentOption}--developer-profile ${profile.name}. Revoke it with: bota ${deploymentOption}auth developer-profiles logout ${profile.name}\n`, signal, write); }
       });
     });

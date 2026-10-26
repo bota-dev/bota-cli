@@ -54,19 +54,23 @@ environment injection or secure API-key profiles until Platform enrollment is
 qualified. The [Platform session guide](docs/platform-developer-sessions.md)
 describes the source-preview contract and remaining acceptance gates.
 
-### Platform developer sessions: explicit DEV selection
+### Platform developer sessions: explicit source selection
 
 The source preview accepts `--developer-deployment dev` to select the fixed,
 reviewed DEV client `bota-cli-dev-v1` at `https://api.dev.bota.dev`, with Platform
-consent at `https://platform.dev.bota.dev`. This selects source configuration;
+consent at `https://platform.dev.bota.dev`. Explicit `--developer-deployment prod`
+selects the reviewed production candidate `bota-cli-prod-v1` at
+`https://api.bota.dev`, with consent at `https://platform.bota.dev`.
+Ordinary users enroll through current project access and scope consent; no
+individual operator grant or manual Bota approval is required. These select source configuration;
 enabled ingress, a configured Portal build and real account consent remain
 separate acceptance gates. The public npm version does not include this change.
-Without this option, the production deployment resolver remains configuration
+Without either explicit selection, the production deployment resolver remains configuration
 off and refuses before native storage or network access.
 
-Always repeat the DEV option for enrollment, use, inspection and recovery. Use
+Always repeat the selected deployment option for enrollment, use, inspection and recovery. Use
 `--developer-profile <name>` to select a protected session for CLI or local MCP.
-API-key selectors and URL overrides cannot be combined with DEV selection;
+API-key selectors and URL overrides cannot be combined with either selection;
 saved metadata, environment variables and custom URLs cannot choose a deployment.
 The source-prepared DEV commands are:
 

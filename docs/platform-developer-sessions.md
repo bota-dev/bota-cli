@@ -3,9 +3,9 @@
 This is the source-preview command contract. Default production Platform login
 remains **configuration off**: `getProductionDeveloperDeployment()` refuses with
 `developer_configuration_unavailable` before opening native storage, a callback
-listener, browser or network request. Explicit `--developer-deployment dev`
-selects the fixed reviewed DEV configuration through the actual service and
-protected native factory. No argument, environment variable or saved profile can
+listener, browser or network request. Explicit `--developer-deployment dev` or
+`--developer-deployment prod` selects a fixed reviewed source candidate through
+the actual service and protected native factory. No argument, environment variable or saved profile can
 supply arbitrary deployment endpoints. The candidate CLI is unpublished;
 historical public npm `0.1.0` does not provide this workflow.
 
@@ -28,6 +28,16 @@ listener binds an ephemeral port with S256 PKCE. Both resource audiences are
 requested for the shared grant. The server sends consent to the configured
 `https://platform.dev.bota.dev` Portal. DEV explicitly opts into
 `negative-fence-v1` recovery.
+
+The explicit PROD selection is pinned to backend source
+[`8a20fef1`](https://github.com/bota-dev/bota/blob/8a20fef1a8a5c2e73d087983654a01a001e159ed/infra/config/developer-auth-prod.candidate.json):
+issuer `https://api.bota.dev`, native client `bota-cli-prod-v1`, the same three
+OAuth paths, REST audience `https://api.bota.dev/v1` and MCP audience
+`https://api.bota.dev/mcp`. It uses both literal callback templates, S256, both
+grant resources and an explicit `negative-fence-v1` recovery selection. Production
+consent belongs to `https://platform.bota.dev`. Ordinary Platform users enroll
+through their existing project permissions and scope consent; an individual
+developer needs no global operator grant or manual Bota approval.
 
 This source selection does not prove active deployment, Portal configuration or
 real account consent. The actual coordinator performs these steps:
@@ -56,6 +66,21 @@ bota --developer-deployment dev --developer-profile dev-work auth status --json
 bota --developer-deployment dev --developer-profile dev-work mcp --mode hosted
 ```
 
+The corresponding source-prepared production commands use the explicit PROD
+selector on every invocation:
+
+```bash
+bota --developer-deployment prod auth login --name prod-work --scope devices:read --scope recordings:read
+bota --developer-deployment prod --developer-profile prod-work auth status --json
+bota --developer-deployment prod --developer-profile prod-work devices list
+bota --developer-deployment prod --developer-profile prod-work mcp --mode hosted
+bota --developer-deployment prod auth developer-profiles logout prod-work
+```
+
+These source commands do not establish deployed production ingress, Portal
+configuration or real account consent. Omitting the deployment selector retains
+the configuration-off default.
+
 The available read scope names are `end_users:read`, `devices:read`,
 `recordings:read`, `transcriptions:read` and `summaries:read`. Choose the minimum
 needed scopes. `--identity-only` requests none; interactive login can show a
@@ -66,8 +91,8 @@ admission remain authoritative.
 Omitting `--name` reserves `default`; it does not select that name for future
 commands. Always pass `--developer-profile` when using a delegated session. Do
 not combine it with `--profile`, `--secure-profile`, `--api-url` or
-`--dashboard-url`; those options also conflict with `--developer-deployment dev`.
-The DEV selector cannot be used for API-key login or unrelated commands.
+`--dashboard-url`; those options also conflict with either explicit deployment.
+Neither selector can be used for API-key login or unrelated commands.
 API-key environment variables cannot substitute for a
 selected delegated session. Endpoint authority comes only from reviewed source
 configuration and must match saved metadata exactly. The selection is captured
@@ -125,6 +150,16 @@ Metadata output contains safe name, state and deployment information; it never
 contains bearer credentials, recovery proofs or native store references. Native
 listing is bounded by the complete 2048-record format limit. No command silently
 chooses another profile when the selected one is unavailable.
+
+Listing validates every metadata record, then returns profiles for the exact
+selected deployment. Valid records for the other reviewed DEV/PROD deployment,
+including retained or removed profiles, remain untouched and are omitted from
+that list. Malformed records, duplicate names or an unrecognized foreign
+deployment refuse the entire list. Names share the existing protected namespace;
+a different deployment does not permit overwriting or reusing a retained name.
+Named show, use, recovery and logout still require an exact deployment match.
+For production profile management repeat `--developer-deployment prod` in the
+commands above.
 
 `recover` resumes the exact durable state, with distinct outcomes:
 
