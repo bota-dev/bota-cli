@@ -8,7 +8,7 @@ import { parseDelegatedLoginDeployment } from '../src/delegated-login.ts';
 import { DelegatedFamilyEngine, createTrustedDelegatedEnrollmentHandoff } from '../src/delegated-family-engine.ts';
 import { familyKeyOf } from '../src/delegated-family-state.ts';
 import { BotaClient } from '../src/client.ts';
-import { printJson } from '../src/output.ts';
+import { printJson, errorDetails } from '../src/output.ts';
 import { getSelectedDeveloperDeployment, withDeveloperDeploymentSelection } from '../src/developer-deployment-selection.ts';
 
 const deployment = parseDelegatedLoginDeployment({ version: 1, issuer: 'https://issuer.example.test', endpoints: {
@@ -267,7 +267,9 @@ test('malformed and unknown foreign metadata refuse before filtering without tou
   const unknown = structuredClone(prod); unknown.client.clientId = 'unreviewed-native-client';
   let hooks = 0;
   const invalid = [
-    [metadata(unknown, 'foreign'), 'developer_profile_invalid'],
+    [metadata(unknown, 'foreign'), 'developer_profile_deployment_unsupported'],
+    [{ ...metadata(unknown, 'foreign'), name: 'PRIVATE_FOREIGN_NAME' }, 'developer_profile_invalid'],
+    [{ ...metadata(unknown, 'foreign'), state: 'PRIVATE_FOREIGN_STATE' }, 'developer_profile_invalid'],
     [{ ...metadata(prod, 'foreign'), state: 'PRIVATE_FOREIGN_STATE' }, 'developer_profile_invalid'],
     [{ ...metadata(prod, 'foreign'), attemptId: 'PRIVATE_ATTEMPT' }, 'developer_profile_invalid'],
     [{ ...metadata(prod, 'foreign'), familyKey: { ...metadata(prod, 'x').familyKey, issuer: dev.issuer } }, 'developer_profile_invalid'],
@@ -281,6 +283,35 @@ test('malformed and unknown foreign metadata refuse before filtering without tou
     assert.equal(f.closes, 1); assert.equal(f.tokenPosts + f.revokePosts + f.business + f.browsers, 0);
   }
   assert.equal(hooks, 0);
+});
+test('unsupported deployment diagnostic is fixed, preserves metadata and waits for native close', async () => {
+  const prod = await sourceDeployment('prod'), unknown = parseDelegatedLoginDeployment({
+    ...prod, issuer: 'https://private-retained.example.test',
+    endpoints: { authorization: 'https://private-retained.example.test/oauth/authorize', token: 'https://private-retained.example.test/oauth/token', revocation: 'https://private-retained.example.test/oauth/revoke' },
+    resources: { rest: 'https://private-retained.example.test/v1', mcp: 'https://private-retained.example.test/mcp' },
+    client: { ...prod.client, clientId: 'PRIVATE_UNSUPPORTED_CLIENT' },
+  });
+  const f = await fixture(false), rows = [metadata(unknown, 'private-retained-name')], before = structuredClone(rows);
+  f.ports.getDeployment = () => prod; f.runtime.list = async () => rows;
+  const entered = defer(), release = defer(); f.beforeClose = async () => { entered.resolve(); await release.promise; };
+  let settled = false;
+  const running = createDeveloperProfileServiceForTrustedPorts(f.ports).list();
+  void running.then(() => { settled = true; }, () => { settled = true; });
+  await entered.promise; await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
+  release.resolve();
+  await assert.rejects(running, error => {
+    const expected = { code: 'developer_profile_deployment_unsupported',
+      message: 'A retained developer profile uses an unsupported deployment. Its protected state was preserved.',
+      recovery_required: false, operation_may_have_executed: false };
+    assert.deepEqual(developerProfileFailure(error), expected); assert.deepEqual(errorDetails(error), expected);
+    assert.equal(error.message, expected.message);
+    assert.doesNotMatch(error.message + JSON.stringify(error) + JSON.stringify(errorDetails(error)), /private-retained|PRIVATE_|https?:\/\//);
+    return true;
+  });
+  assert.equal(f.closes, 1); assert.equal(f.context.signal.aborted, true); assert.throws(() => f.context.budget.assertActive());
+  assert.equal(f.tokenPosts + f.revokePosts + f.business + f.browsers + f.checks + f.output.length, 0);
+  assert.deepEqual(f.calls, []); assert.deepEqual(rows, before);
+  assert.equal(f.proofs.size + f.initial.size + f.secrets.size + f.snapshots.size, 0);
 });
 test('a duplicate name across selected and foreign metadata refuses instead of hiding a collision', async () => {
   const dev = await sourceDeployment('dev'), prod = await sourceDeployment('prod'), f = await fixture(false);

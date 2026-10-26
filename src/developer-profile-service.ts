@@ -193,7 +193,7 @@ export function createDeveloperProfileServiceForTrustedPorts(input: DeveloperPro
       });
       return Object.freeze(profiles.filter(profile => {
         if (JSON.stringify(profile.deployment) === selected) return true;
-        if (!isKnownDeveloperDeployment(profile.deployment)) fail('developer_profile_invalid');
+        if (!isKnownDeveloperDeployment(profile.deployment)) fail('developer_profile_deployment_unsupported');
         return false;
       }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     }); },

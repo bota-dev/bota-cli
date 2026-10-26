@@ -155,7 +155,11 @@ Listing validates every metadata record, then returns profiles for the exact
 selected deployment. Valid records for the other reviewed DEV/PROD deployment,
 including retained or removed profiles, remain untouched and are omitted from
 that list. Malformed records, duplicate names or an unrecognized foreign
-deployment refuse the entire list. Names share the existing protected namespace;
+deployment refuse the entire list. An otherwise valid unsupported deployment
+reports `developer_profile_deployment_unsupported` without exposing its identity;
+its protected state stays retained, with no automatic migration or deletion.
+Platform login remains self-service under existing project permissions and consent.
+Names share the existing protected namespace;
 a different deployment does not permit overwriting or reusing a retained name.
 Named show, use, recovery and logout still require an exact deployment match.
 For production profile management repeat `--developer-deployment prod` in the

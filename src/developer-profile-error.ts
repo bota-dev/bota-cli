@@ -3,6 +3,7 @@ import { types } from 'node:util';
 const messages = {
   developer_configuration_unavailable: 'Platform developer login is not configured for this build.',
   developer_profile_invalid: 'The developer profile selection is invalid or incompatible with this command.',
+  developer_profile_deployment_unsupported: 'A retained developer profile uses an unsupported deployment. Its protected state was preserved.',
   developer_profile_missing: 'The selected developer profile does not exist.',
   developer_profile_exists: 'The developer profile name is already reserved. Inspect its state before continuing.',
   developer_profile_disabled: 'The selected developer profile cannot perform this operation.',
