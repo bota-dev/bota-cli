@@ -146,6 +146,30 @@ test('one original deadline closes listener and withdraws retention before joine
   cleanup.resolve(receipt(binding)); await assert.rejects(pending, refused('login_deadline'));
 });
 
+test('an early timer callback cannot withdraw retention before the original monotonic deadline', async t => {
+  const controller = new AbortController(), entered = deferred(), cleanup = deferred();
+  const schedule = globalThis.setTimeout; let initial, binding, context, scheduled = 0, settled = false;
+  t.mock.method(globalThis, 'setTimeout', function (callback, delay, ...args) {
+    scheduled++;
+    const handle = Reflect.apply(schedule, globalThis, [callback, delay, ...args]);
+    initial ??= { callback, handle };
+    return handle;
+  });
+  const pending = startRecoverableDelegatedLoginAttempt(deployment(), selection(), { async retain(b, c) {
+    binding = b; context = c; entered.resolve(); return cleanup.promise;
+  } }, { signal: controller.signal, timeoutMs: 30_000 }).finally(() => { settled = true; });
+  t.after(async () => { controller.abort(); cleanup.resolve(binding && receipt(binding)); await pending.catch(() => undefined); });
+  await entered.promise; assert.equal(typeof initial?.callback, 'function');
+  // A fired native timer has already consumed its handle. Simulate that early
+  // scheduling observation without replacing the genuine listener or clock.
+  clearTimeout(initial.handle); initial.callback();
+  assert.equal(context.signal.aborted, false); assert.doesNotThrow(() => context.budget.assertActive());
+  assert.equal(settled, false); assert.equal(listeners.get(binding.redirectUri).server.listening, true);
+  controller.abort(); await new Promise(resolve => setImmediate(resolve)); await closed(binding.redirectUri);
+  cleanup.resolve(receipt(binding)); await assert.rejects(pending, refused('login_cancelled'));
+  const retiredCount = scheduled; initial.callback(); assert.equal(scheduled, retiredCount);
+});
+
 test('parent authority loss caused by retention retirement cannot publish acknowledged handle', async () => {
   const controller = new AbortController(); let uri;
   await assert.rejects(startRecoverableDelegatedLoginAttempt(deployment(), selection(), { async retain(b, c) {
