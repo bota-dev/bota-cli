@@ -37,13 +37,15 @@ test('missing production config is checked before any interactive scope prompt',
   assert.equal(f.calls.length, 0);
 });
 
-test('DEV login guidance retains the explicit deployment for future selection and logout', async () => {
+test('DEV and PROD login guidance retain the explicit deployment for future selection and logout', async () => {
+  for (const selected of ['dev', 'prod']) {
   const output = [], f = setup(async (channel, text) => output.push({ channel, text }));
-  await f.program.parseAsync(['node', 'bota', '--developer-deployment', 'dev', 'auth', 'login', '--name', 'work', '--identity-only']);
+  await f.program.parseAsync(['node', 'bota', '--developer-deployment', selected, 'auth', 'login', '--name', 'work', '--identity-only']);
   const guidance = output.find(value => value.channel === 'stderr').text;
-  assert.match(guidance, /--developer-deployment dev --developer-profile work/);
-  assert.match(guidance, /bota --developer-deployment dev auth developer-profiles logout work/);
+  assert.ok(guidance.includes(`--developer-deployment ${selected} --developer-profile work`));
+  assert.ok(guidance.includes(`bota --developer-deployment ${selected} auth developer-profiles logout work`));
   assert.deepEqual(f.calls.find(value => value.op === 'login').selection.grantResourceKinds, ['rest', 'mcp']);
+  }
 });
 
 test('legacy key login rejects an explicit developer deployment before config writes', async () => {

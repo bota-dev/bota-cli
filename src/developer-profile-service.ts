@@ -15,6 +15,7 @@ import type { DelegatedNativeRuntime, DelegatedNativeProfile } from './delegated
 import { DELEGATED_NATIVE_MAX_RECORDS } from './delegated-native-contract.js';
 import { DeveloperProfileError, sanitizeDeveloperProfileError, developerProfileFailure } from './developer-profile-error.js';
 import { bufferDeveloperCommandOutput } from './developer-command-output.js';
+import { isKnownDeveloperDeployment } from './developer-deployment-selection.js';
 
 export interface DeveloperProfileOptions { readonly signal?: AbortSignal; readonly timeoutMs?: number }
 export interface DeveloperProfileServicePorts {
@@ -182,9 +183,18 @@ export function createDeveloperProfileServiceForTrustedPorts(input: DeveloperPro
     inspect(nameInput: string, options: DeveloperProfileOptions = {}) { const name = nameOf(nameInput); return operation(options, state => state.selected(name)); },
     list(options: DeveloperProfileOptions = {}) { return operation(options, async state => {
       const values = familyArray(await state.runtime.list(state.context), DELEGATED_NATIVE_MAX_RECORDS);
-      const names = new Set<string>(); return Object.freeze(values.map(value => {
+      const names = new Set<string>(), selected = JSON.stringify(state.deployment);
+      // Validate the whole metadata inventory before omitting a known foreign
+      // deployment. Unknown or malformed records never disappear through filter.
+      const profiles = values.map(value => {
         const fields = familyObject(value, ['name', 'state', 'attemptId', 'familyKey', 'pendingFamilyKey', 'deployment']);
-        const name = nameOf(fields.name); if (names.has(name)) fail('developer_profile_invalid'); names.add(name); return checkedProfile(value, name, state.deployment);
+        const name = nameOf(fields.name); if (names.has(name)) fail('developer_profile_invalid'); names.add(name);
+        return checkedProfile(value, name, parseDelegatedLoginDeployment(fields.deployment));
+      });
+      return Object.freeze(profiles.filter(profile => {
+        if (JSON.stringify(profile.deployment) === selected) return true;
+        if (!isKnownDeveloperDeployment(profile.deployment)) fail('developer_profile_deployment_unsupported');
+        return false;
       }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     }); },
     status(nameInput: string, options: DeveloperProfileOptions = {}) { const name = nameOf(nameInput); return operation(options, async state => {

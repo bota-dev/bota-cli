@@ -314,7 +314,15 @@ async function startAttempt(deploymentInput: unknown, selectionInput: unknown,
   server.on('error', () => { ready(); finish(new DelegatedLoginError('login_unavailable')); });
   server.on('listening', ready);
   const abort = () => finish(new DelegatedLoginError('login_cancelled'));
-  const timer = setTimeout(() => finish(new DelegatedLoginError('login_deadline')), timeoutMs);
+  let timer = setTimeout(onDeadline, Math.max(1, Math.ceil(deadline - performance.now())));
+  function onDeadline(): void {
+    if (outcome) return;
+    // Native timers may fire before the fractional monotonic deadline. Retain
+    // the original deadline instead of retiring authority on that early tick.
+    const remaining = deadline - performance.now();
+    if (remaining > 0) { timer = setTimeout(onDeadline, Math.ceil(remaining)); return; }
+    finish(new DelegatedLoginError('login_deadline'));
+  }
   if (signal) EventTarget.prototype.addEventListener.call(signal, 'abort', abort, { once: true });
   function finish(selected: { code: string } | DelegatedLoginError): void {
     if (outcome) return;

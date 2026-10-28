@@ -3,7 +3,7 @@ import test from 'node:test';
 import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
 import { EventEmitter } from 'node:events';
 import { Command } from 'commander';
-import { getSelectedDeveloperDeployment, readDeveloperDeploymentSelection, validateDeveloperDeploymentCommand,
+import { getSelectedDeveloperDeployment, isKnownDeveloperDeployment, readDeveloperDeploymentSelection, validateDeveloperDeploymentCommand,
   withDeveloperDeploymentSelection } from '../src/developer-deployment-selection.ts';
 import { getProductionDeveloperDeployment } from '../src/delegated-production-deployment.ts';
 import { developerProfileService } from '../src/developer-profile-production.ts';
@@ -42,6 +42,23 @@ test('DEV selects the fixed reviewed backend client and both independent resourc
   unavailable();
 });
 
+test('explicit PROD selects the reviewed source candidate without enabling the default resolver or native factory', async () => {
+  await scope('prod', async () => {
+    const value = getSelectedDeveloperDeployment();
+    assert.deepEqual(value, { version: 1, issuer: 'https://api.bota.dev', recoveryProtocol: 'negative-fence-v1',
+      endpoints: { authorization: 'https://api.bota.dev/oauth/authorize', token: 'https://api.bota.dev/oauth/token', revocation: 'https://api.bota.dev/oauth/revoke' },
+      resources: { rest: 'https://api.bota.dev/v1', mcp: 'https://api.bota.dev/mcp' },
+      client: { clientId: 'bota-cli-prod-v1', kind: 'native', pkceMethod: 'S256',
+        redirectUris: ['http://127.0.0.1/oauth/callback', 'http://[::1]/oauth/callback'], resourceKinds: ['rest', 'mcp'] } });
+    assert.deepEqual(developerProfileService.configuration(), value);
+    for (const object of [value, value.endpoints, value.resources, value.client, value.client.redirectUris, value.client.resourceKinds]) assert.equal(Object.isFrozen(object), true);
+    assert.equal(isKnownDeveloperDeployment(value), true);
+    assert.equal(isKnownDeveloperDeployment({ ...value, client: { ...value.client, clientId: 'bota-cli-dev-v1' } }), false);
+    assert.throws(getProductionDeveloperDeployment, refused('developer_configuration_unavailable'));
+  });
+  unavailable();
+});
+
 test('parsed selection is sampled once and cannot retarget across awaited work', async () => {
   let selected = 'dev', reads = 0;
   await withDeveloperDeploymentSelection(() => { reads++; return selected; }, async () => {
@@ -55,7 +72,7 @@ test('parsed selection is sampled once and cannot retarget across awaited work',
 test('invalid selections remain refused and do not inspect opaque input or exception hooks', async () => {
   let hooks = 0;
   const opaque = { get issuer() { hooks++; throw Error('PRIVATE_CANARY'); }, [Symbol.toPrimitive]() { hooks++; return 'dev'; } };
-  for (const value of ['production', 'DEV', 'https://PRIVATE_CANARY.test', '', null, true, ['dev'], opaque,
+  for (const value of ['production', 'DEV', 'PROD', 'https://PRIVATE_CANARY.test', '', null, true, ['dev'], opaque,
     new Proxy({}, { get() { hooks++; throw Error('PRIVATE_CANARY'); } })]) {
     await scope(value, async () => {
       for (let index = 0; index < 2; index++) assert.throws(getSelectedDeveloperDeployment, refused('developer_profile_invalid'));
@@ -83,14 +100,18 @@ test('concurrent and nested command scopes isolate their selection', async () =>
     await scope(undefined, async () => unavailable());
     assert.equal(readDeveloperDeploymentSelection(), 'dev');
   });
-  await started; await scope(undefined, async () => { unavailable(); release(); }); await dev;
+  await started; await scope('prod', async () => {
+    assert.equal(getSelectedDeveloperDeployment().client.clientId, 'bota-cli-prod-v1');
+    await scope(undefined, async () => unavailable());
+    assert.equal(readDeveloperDeploymentSelection(), 'prod'); release();
+  }); await dev;
   unavailable();
 });
 
-test('late callbacks lose selection after successful or failed command settlement', async () => {
-  for (const fail of [false, true]) {
+test('late callbacks lose DEV and PROD selection after successful or failed command settlement', async () => {
+  for (const selected of ['dev', 'prod']) for (const fail of [false, true]) {
     let late;
-    const running = scope('dev', async () => {
+    const running = scope(selected, async () => {
       const captured = AsyncLocalStorage.snapshot(); late = () => captured(getSelectedDeveloperDeployment);
       await new Promise(resolve => setImmediate(resolve));
       if (fail) throw Error('owned failure');
@@ -115,66 +136,68 @@ function commandFixture() {
   return { calls, parse: args => withDeveloperDeploymentSelection(() => program.opts().developerDeployment, () => program.parseAsync(['node', 'bota', ...args])) };
 }
 
-test('DEV selection reaches login, management, REST and hosted MCP through the same command lifetime', async () => {
-  for (const args of [['auth', 'login'], ['auth', 'developer-profiles', 'list'], ['auth', 'developer-profiles', 'show', 'work'],
+test('DEV and PROD selection reach login, management, REST and hosted MCP through the same command lifetime', async () => {
+  for (const selected of ['dev', 'prod']) for (const args of [['auth', 'login'], ['auth', 'developer-profiles', 'list'], ['auth', 'developer-profiles', 'show', 'work'],
     ['auth', 'developer-profiles', 'recover', 'work'], ['auth', 'developer-profiles', 'logout', 'work'],
     ['--developer-profile', 'work', 'auth', 'status'], ['--developer-profile', 'work', 'auth', 'logout'],
     ['--developer-profile', 'work', 'devices', 'list'], ['--developer-profile', 'work', 'end-users', 'list'],
     ['--developer-profile', 'work', 'recordings', 'list'], ['--developer-profile', 'work', 'mcp', '--mode', 'hosted']]) {
-    const f = commandFixture(); await f.parse(['--developer-deployment', 'dev', ...args]);
-    assert.equal(f.calls.length, 1); assert.equal(f.calls[0].deployment.client.clientId, 'bota-cli-dev-v1');
+    const f = commandFixture(); await f.parse(['--developer-deployment', selected, ...args]);
+    assert.equal(f.calls.length, 1); assert.equal(f.calls[0].deployment.client.clientId, `bota-cli-${selected}-v1`);
   }
 });
 
-test('mixed key or URL authority and unselected/unsupported DEV actions refuse before the action', async () => {
+test('mixed key or URL authority and unselected/unsupported DEV or PROD actions refuse before the action', async () => {
   const commands = [['auth', 'login', 'PRIVATE_CANARY'], ['auth', 'status'], ['auth', 'logout'], ['devices', 'list'], ['mcp', '--mode', 'hosted'],
     ['--developer-profile', 'work', 'integrations', 'list'], ['--developer-profile', 'work', 'auth', 'developer-profiles', 'show', 'work']];
   for (const option of ['--profile', '--secure-profile', '--api-url', '--dashboard-url']) commands.push([option, 'PRIVATE_CANARY', 'auth', 'login']);
-  for (const args of commands) {
-    const f = commandFixture(); await assert.rejects(f.parse(['--developer-deployment', 'dev', ...args]), refused('developer_profile_invalid'));
+  for (const selected of ['dev', 'prod']) for (const args of commands) {
+    const f = commandFixture(); await assert.rejects(f.parse(['--developer-deployment', selected, ...args]), refused('developer_profile_invalid'));
     assert.deepEqual(f.calls, []);
   }
   const f = commandFixture(); await assert.rejects(f.parse(['--developer-deployment', 'https://PRIVATE_CANARY.test', 'auth', 'login']), refused('developer_profile_invalid'));
   assert.deepEqual(f.calls, []);
 });
 
-test('actual async Commander lifetime keeps DEV authority until a hosted action and its cleanup join', async () => {
+test('actual async Commander lifetime keeps PROD authority until a hosted action and its cleanup join', async () => {
   let release, entered, late, settled = false;
   const held = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
   const program = new Command().option('--developer-deployment <name>').option('--developer-profile <name>');
   program.command('mcp').option('--mode <mode>').action(async () => {
     const captured = AsyncLocalStorage.snapshot(); late = () => captured(getSelectedDeveloperDeployment);
-    assert.equal(developerProfileService.configuration().client.clientId, 'bota-cli-dev-v1'); entered();
-    await held; assert.equal(developerProfileService.configuration().client.clientId, 'bota-cli-dev-v1');
+    assert.equal(developerProfileService.configuration().client.clientId, 'bota-cli-prod-v1'); entered();
+    await held; assert.equal(developerProfileService.configuration().client.clientId, 'bota-cli-prod-v1');
   });
   program.hook('preAction', (_command, action) => validateDeveloperDeploymentCommand(program, action));
   const running = withDeveloperDeploymentSelection(() => program.opts().developerDeployment, () =>
-    program.parseAsync(['node', 'bota', '--developer-deployment', 'dev', '--developer-profile', 'work', 'mcp', '--mode', 'hosted']))
+    program.parseAsync(['node', 'bota', '--developer-deployment', 'prod', '--developer-profile', 'work', 'mcp', '--mode', 'hosted']))
     .finally(() => { settled = true; });
   await started; await new Promise(resolve => setImmediate(resolve));
   assert.equal(settled, false); unavailable(); release(); await running;
   assert.throws(late, refused('developer_profile_invalid'));
 });
 
-test('MCP auth re-enters captured DEV from an external emitter and refuses after owner retirement', async () => {
+test('MCP auth re-enters captured DEV and PROD from an external emitter and refuses after owner retirement', async () => {
+  for (const selected of ['dev', 'prod']) {
+  const clientId = `bota-cli-${selected}-v1`;
   const external = new AsyncResource('pre-existing-stdio'), emitter = new EventEmitter();
   let authenticate, releaseOwner, ownerEntered, callbackResult, admissions = 0, releaseAction, actionEntered, actionSettled = false;
   const ownerHeld = new Promise(resolve => { releaseOwner = resolve; }), started = new Promise(resolve => { ownerEntered = resolve; });
   const actionHeld = new Promise(resolve => { releaseAction = resolve; }), actionStarted = new Promise(resolve => { actionEntered = resolve; });
   const expected = Object.freeze({ familyId: 'owned-metadata-only' });
   const service = {
-    async pin() { assert.equal(developerProfileService.configuration().client.clientId, 'bota-cli-dev-v1'); return expected; },
+    async pin() { assert.equal(developerProfileService.configuration().client.clientId, clientId); return expected; },
     async run(_name, kind, action, _options, pinned) {
       admissions++; assert.equal(kind, 'mcp'); assert.equal(pinned, expected);
-      assert.equal(developerProfileService.configuration().client.clientId, 'bota-cli-dev-v1');
+      assert.equal(developerProfileService.configuration().client.clientId, clientId);
       return action();
     },
   };
   emitter.on('request', () => { callbackResult = authenticate(new AbortController().signal, async () => {
     actionEntered(); await actionHeld;
-    assert.equal(developerProfileService.configuration().client.clientId, 'bota-cli-dev-v1'); return 'owned-result';
+    assert.equal(developerProfileService.configuration().client.clientId, clientId); return 'owned-result';
   }).finally(() => { actionSettled = true; }); void callbackResult.catch(() => {}); });
-  const running = scope('dev', async () => {
+  const running = scope(selected, async () => {
     authenticate = await bindDeveloperMcpRequestAuth(service)('work'); ownerEntered();
     await ownerHeld;
   });
@@ -186,6 +209,7 @@ test('MCP auth re-enters captured DEV from an external emitter and refuses after
     external.runInAsyncScope(() => emitter.emit('request'));
     await assert.rejects(callbackResult, refused('developer_profile_invalid')); assert.equal(admissions, 1);
   } finally { releaseAction(); releaseOwner(); await running; emitter.removeAllListeners(); external.emitDestroy(); }
+  }
 });
 
 test('unselected MCP callbacks cannot inherit another command selection', async () => {
@@ -193,6 +217,6 @@ test('unselected MCP callbacks cannot inherit another command selection', async 
     calls.push(readDeveloperDeploymentSelection()); unavailable(); return action();
   } };
   const authenticate = await bindDeveloperMcpRequestAuth(service)('unselected');
-  await scope('dev', async () => { assert.equal(await authenticate(new AbortController().signal, async () => 'ok'), 'ok'); });
-  assert.deepEqual(calls, [undefined]);
+  for (const selected of ['dev', 'prod']) await scope(selected, async () => { assert.equal(await authenticate(new AbortController().signal, async () => 'ok'), 'ok'); });
+  assert.deepEqual(calls, [undefined, undefined]);
 });

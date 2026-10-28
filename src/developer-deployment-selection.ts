@@ -23,10 +23,36 @@ const development = parseDelegatedLoginDeployment({
     resourceKinds: ['rest', 'mcp'],
   },
 });
+// Reviewed backend production cohort8a20fef1a8a5c2e73d087983654a01a001e159ed.
+// Explicit selection is source configuration; deployed readiness is separate.
+const production = parseDelegatedLoginDeployment({
+  version: 1,
+  issuer: 'https://api.bota.dev',
+  recoveryProtocol: 'negative-fence-v1',
+  endpoints: {
+    authorization: 'https://api.bota.dev/oauth/authorize',
+    token: 'https://api.bota.dev/oauth/token',
+    revocation: 'https://api.bota.dev/oauth/revoke',
+  },
+  resources: { rest: 'https://api.bota.dev/v1', mcp: 'https://api.bota.dev/mcp' },
+  client: {
+    clientId: 'bota-cli-prod-v1', kind: 'native', pkceMethod: 'S256',
+    redirectUris: ['http://127.0.0.1/oauth/callback', 'http://[::1]/oauth/callback'],
+    resourceKinds: ['rest', 'mcp'],
+  },
+});
+const knownDeployments = [JSON.stringify(development), JSON.stringify(production)];
+/** Metadata filtering only: exact source-owned configuration supplies no
+ * identity, credential or live-readiness authority and samples no selection. */
+export function isKnownDeveloperDeployment(value: unknown): boolean {
+  try { return knownDeployments.includes(JSON.stringify(parseDelegatedLoginDeployment(value))); }
+  catch { return false; }
+}
+type DeveloperDeploymentSelection = 'dev' | 'prod';
 interface SelectionOwner {
   active: boolean;
   state: 'uncaptured' | 'sampling' | 'captured' | 'invalid';
-  selected?: 'dev';
+  selected?: DeveloperDeploymentSelection;
   readonly read: () => unknown;
 }
 const selection = new AsyncLocalStorage<SelectionOwner>();
@@ -45,7 +71,7 @@ export async function withDeveloperDeploymentSelection<T>(read: () => unknown, w
 }
 
 /** Captures the parsed enum; saved metadata and environment never select it. */
-export function readDeveloperDeploymentSelection(): 'dev' | undefined {
+export function readDeveloperDeploymentSelection(): DeveloperDeploymentSelection | undefined {
   const owner = selection.getStore();
   if (!owner) return undefined;
   if (!owner.active) invalid();
@@ -56,17 +82,18 @@ export function readDeveloperDeploymentSelection(): 'dev' | undefined {
     owner.state = 'sampling';
     let value: unknown;
     try { value = owner.read(); } catch { owner.state = 'invalid'; return invalid(); }
-    if (owner.state !== 'sampling' || value !== undefined && value !== 'dev') { owner.state = 'invalid'; invalid(); }
+    if (owner.state !== 'sampling' || value !== undefined && value !== 'dev' && value !== 'prod') { owner.state = 'invalid'; invalid(); }
     owner.selected = value;
     owner.state = 'captured';
   }
   return owner.selected;
 }
 
-/** The production resolver stays off. Only the explicit source-owned DEV enum
- * selects the reviewed literal; no arbitrary persisted or supplied URL is used. */
+/** The default production resolver stays off. Explicit source-owned enums select
+ * reviewed literals; no arbitrary persisted or supplied URL is used. */
 export function getSelectedDeveloperDeployment(): DelegatedLoginDeployment {
-  return readDeveloperDeploymentSelection() === 'dev' ? development : getProductionDeveloperDeployment();
+  const selected = readDeveloperDeploymentSelection();
+  return selected === 'dev' ? development : selected === 'prod' ? production : getProductionDeveloperDeployment();
 }
 
 /** Bind the current private owner to request callbacks. EventEmitter dispatch
@@ -86,7 +113,7 @@ export function captureDeveloperDeploymentSelection(): <T>(work: () => Promise<T
 /** Source-owned Commander pre-action guard. These objects are the actual parsed
  * command, not a public configuration or credential-provider input port. */
 export function validateDeveloperDeploymentCommand(program: Command, action: Command): void {
-  if (readDeveloperDeploymentSelection() !== 'dev') return;
+  if (readDeveloperDeploymentSelection() === undefined) return;
   const options = program.opts();
   if (['profile', 'secureProfile', 'apiUrl', 'dashboardUrl'].some(name => options[name] !== undefined)) invalid();
   const route: string[] = [];

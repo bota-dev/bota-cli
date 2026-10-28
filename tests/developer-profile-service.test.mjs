@@ -8,7 +8,8 @@ import { parseDelegatedLoginDeployment } from '../src/delegated-login.ts';
 import { DelegatedFamilyEngine, createTrustedDelegatedEnrollmentHandoff } from '../src/delegated-family-engine.ts';
 import { familyKeyOf } from '../src/delegated-family-state.ts';
 import { BotaClient } from '../src/client.ts';
-import { printJson } from '../src/output.ts';
+import { printJson, errorDetails } from '../src/output.ts';
+import { getSelectedDeveloperDeployment, withDeveloperDeploymentSelection } from '../src/developer-deployment-selection.ts';
 
 const deployment = parseDelegatedLoginDeployment({ version: 1, issuer: 'https://issuer.example.test', endpoints: {
   authorization: 'https://issuer.example.test/oauth/authorize', token: 'https://issuer.example.test/oauth/token', revocation: 'https://issuer.example.test/oauth/revoke' },
@@ -241,4 +242,80 @@ test('metadata list accepts the complete native 2048-record limit and refuses ov
   const values = await f.service.list(); assert.equal(values.length, 2048); assert.ok(values[0].name < values.at(-1).name);
   f.runtime.list = async () => Array.from({ length: 2049 }, (_, index) => ({ name: 'work-' + index, state: 'reserved', attemptId: null, familyKey: null, pendingFamilyKey: null, deployment }));
   await assert.rejects(f.service.list(), fixed('developer_operation_failed')); assert.equal(f.tokenPosts + f.revokePosts, 0);
+});
+
+const sourceDeployment = selected => withDeveloperDeploymentSelection(() => selected, async () => getSelectedDeveloperDeployment());
+const metadata = (selected, name, state = 'ready') => ({ name, state, attemptId: state === 'removed' ? null : randomUUID(),
+  familyKey: state === 'ready' ? { storeId: 'owned-list-fixture', issuer: selected.issuer, clientId: selected.client.clientId, familyId: randomUUID() } : null,
+  pendingFamilyKey: null, deployment: selected });
+test('validated DEV and PROD metadata coexist while lists and named use remain deployment-bound', async () => {
+  const dev = await sourceDeployment('dev'), prod = await sourceDeployment('prod');
+  const rows = [metadata(dev, 'dev-ready'), metadata(prod, 'prod-ready'), metadata(dev, 'dev-removed', 'removed'), metadata(prod, 'prod-proof', 'proof-ready')];
+  const original = structuredClone(rows);
+  for (const selected of [dev, prod]) {
+    const f = await fixture(false); f.ports.getDeployment = () => selected; f.runtime.list = async () => structuredClone(rows);
+    const service = createDeveloperProfileServiceForTrustedPorts(f.ports), result = await service.list();
+    assert.deepEqual(result.map(value => value.name), rows.filter(value => value.deployment.issuer === selected.issuer).map(value => value.name).sort());
+    assert.equal(Object.isFrozen(result), true); assert.equal(result.every(value => value.deployment.issuer === selected.issuer), true);
+    const foreign = rows.find(value => value.deployment.issuer !== selected.issuer); f.runtime.load = async () => structuredClone(foreign);
+    await assert.rejects(service.inspect(foreign.name), fixed('developer_profile_invalid'));
+    assert.equal(f.tokenPosts + f.revokePosts + f.business + f.browsers, 0); assert.deepEqual(rows, original);
+  }
+});
+test('malformed and unknown foreign metadata refuse before filtering without touching reflective hooks', async () => {
+  const dev = await sourceDeployment('dev'), prod = await sourceDeployment('prod');
+  const unknown = structuredClone(prod); unknown.client.clientId = 'unreviewed-native-client';
+  let hooks = 0;
+  const invalid = [
+    [metadata(unknown, 'foreign'), 'developer_profile_deployment_unsupported'],
+    [{ ...metadata(unknown, 'foreign'), name: 'PRIVATE_FOREIGN_NAME' }, 'developer_profile_invalid'],
+    [{ ...metadata(unknown, 'foreign'), state: 'PRIVATE_FOREIGN_STATE' }, 'developer_profile_invalid'],
+    [{ ...metadata(prod, 'foreign'), state: 'PRIVATE_FOREIGN_STATE' }, 'developer_profile_invalid'],
+    [{ ...metadata(prod, 'foreign'), attemptId: 'PRIVATE_ATTEMPT' }, 'developer_profile_invalid'],
+    [{ ...metadata(prod, 'foreign'), familyKey: { ...metadata(prod, 'x').familyKey, issuer: dev.issuer } }, 'developer_profile_invalid'],
+    [{ ...metadata(prod, 'foreign'), get deployment() { hooks++; throw Error('PRIVATE_FOREIGN_DEPLOYMENT'); } }, 'developer_operation_failed'],
+    [new Proxy(metadata(prod, 'foreign'), { get() { hooks++; throw Error('PRIVATE_FOREIGN_PROXY'); } }), 'developer_operation_failed'],
+  ];
+  for (const [foreign, code] of invalid) {
+    const f = await fixture(false); f.ports.getDeployment = () => dev;
+    f.runtime.list = async () => [metadata(dev, 'selected'), foreign];
+    await assert.rejects(createDeveloperProfileServiceForTrustedPorts(f.ports).list(), fixed(code));
+    assert.equal(f.closes, 1); assert.equal(f.tokenPosts + f.revokePosts + f.business + f.browsers, 0);
+  }
+  assert.equal(hooks, 0);
+});
+test('unsupported deployment diagnostic is fixed, preserves metadata and waits for native close', async () => {
+  const prod = await sourceDeployment('prod'), unknown = parseDelegatedLoginDeployment({
+    ...prod, issuer: 'https://private-retained.example.test',
+    endpoints: { authorization: 'https://private-retained.example.test/oauth/authorize', token: 'https://private-retained.example.test/oauth/token', revocation: 'https://private-retained.example.test/oauth/revoke' },
+    resources: { rest: 'https://private-retained.example.test/v1', mcp: 'https://private-retained.example.test/mcp' },
+    client: { ...prod.client, clientId: 'PRIVATE_UNSUPPORTED_CLIENT' },
+  });
+  const f = await fixture(false), rows = [metadata(unknown, 'private-retained-name')], before = structuredClone(rows);
+  f.ports.getDeployment = () => prod; f.runtime.list = async () => rows;
+  const entered = defer(), release = defer(); f.beforeClose = async () => { entered.resolve(); await release.promise; };
+  let settled = false;
+  const running = createDeveloperProfileServiceForTrustedPorts(f.ports).list();
+  void running.then(() => { settled = true; }, () => { settled = true; });
+  await entered.promise; await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
+  release.resolve();
+  await assert.rejects(running, error => {
+    const expected = { code: 'developer_profile_deployment_unsupported',
+      message: 'A retained developer profile uses an unsupported deployment. Its protected state was preserved.',
+      recovery_required: false, operation_may_have_executed: false };
+    assert.deepEqual(developerProfileFailure(error), expected); assert.deepEqual(errorDetails(error), expected);
+    assert.equal(error.message, expected.message);
+    assert.doesNotMatch(error.message + JSON.stringify(error) + JSON.stringify(errorDetails(error)), /private-retained|PRIVATE_|https?:\/\//);
+    return true;
+  });
+  assert.equal(f.closes, 1); assert.equal(f.context.signal.aborted, true); assert.throws(() => f.context.budget.assertActive());
+  assert.equal(f.tokenPosts + f.revokePosts + f.business + f.browsers + f.checks + f.output.length, 0);
+  assert.deepEqual(f.calls, []); assert.deepEqual(rows, before);
+  assert.equal(f.proofs.size + f.initial.size + f.secrets.size + f.snapshots.size, 0);
+});
+test('a duplicate name across selected and foreign metadata refuses instead of hiding a collision', async () => {
+  const dev = await sourceDeployment('dev'), prod = await sourceDeployment('prod'), f = await fixture(false);
+  f.ports.getDeployment = () => dev; f.runtime.list = async () => [metadata(prod, 'duplicate'), metadata(dev, 'duplicate')];
+  await assert.rejects(createDeveloperProfileServiceForTrustedPorts(f.ports).list(), fixed('developer_profile_invalid'));
+  assert.equal(f.tokenPosts + f.revokePosts + f.business + f.browsers, 0);
 });
