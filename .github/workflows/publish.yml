@@ -1,9 +1,15 @@
-name: Publish preview
+name: Publish CLI
 
 on:
   push:
     tags:
-      - 'v0.2.0-beta.*'
+      - 'v*'
+
+# One cooperative writer for beta, next and latest. Registry tags have no CAS;
+# an unexpected concurrent tag change refuses rather than rolling it back.
+concurrency:
+  group: npm-cli-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -12,30 +18,27 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  publish:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: npm-cli-preview
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      CLI_PREVIEW_PUBLICATION_APPROVAL: ${{ vars.CLI_PREVIEW_PUBLICATION_APPROVAL }}
-      CLI_SOURCE_LICENSE_APPROVAL: ${{ vars.CLI_SOURCE_LICENSE_APPROVAL }}
-
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.23.2', '24.19.0']
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Setup Node.js (npmjs.org)
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Pin release tooling
+        run: npm install --global npm@11.21.0 --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Type check
         run: npm run type-check
@@ -49,22 +52,69 @@ jobs:
       - name: Prepare and verify the installed candidate
         run: npm run verify:package
 
-      - name: Require exact-source license and publication approvals
-        run: npm run check:publication
-
-      - name: Publish the inspected tarball to beta with provenance
-        shell: bash
-        run: |
-          tarball=$(node -e "process.stdout.write(require('./.release/package-receipt.json').filename)")
-          npm publish ".release/$tarball" --access public --tag beta --provenance --ignore-scripts
-
       - name: Retain the exact candidate and verification receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cli-preview-${{ github.sha }}
+          name: cli-candidate-${{ github.sha }}-node${{ matrix.node }}
           path: |
             .release/*.tgz
             .release/package-receipt.json
             .release/consumer/*.json
+            dist/index.js
+            dist/release.json
+            dist/THIRD_PARTY_NOTICES.txt
+          if-no-files-found: error
+          include-hidden-files: true
+
+  publish:
+    needs: qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Configure required human reviewers and protected release tags for this
+    # environment before activation. Exact-source approvals remain mandatory.
+    environment: npm-cli-release
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      CLI_PREVIEW_PUBLICATION_APPROVAL: ${{ vars.CLI_PREVIEW_PUBLICATION_APPROVAL }}
+      CLI_STABLE_PUBLICATION_APPROVAL: ${{ vars.CLI_STABLE_PUBLICATION_APPROVAL }}
+      CLI_SOURCE_LICENSE_APPROVAL: ${{ vars.CLI_SOURCE_LICENSE_APPROVAL }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.19.0'
+
+      - name: Pin release tooling
+        run: npm install --global npm@11.21.0 --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+
+      - name: Receive the inspected Node 24 candidate from this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli-candidate-${{ github.sha }}-node24.19.0
+          path: .
+
+      - name: Require exact-source license and publication approvals
+        run: npm run check:publication
+
+      - name: Publish, authenticate public readback and promote qualified stable releases
+        run: npm run release:registry
+
+      - name: Retain publication state, candidate and verification receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-registry-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .release/*.tgz
+            .release/package-receipt.json
+            .release/registry-release-receipt.json
+            .release/consumer/*.json
+            .release/public-consumer/*.json
           if-no-files-found: error
           include-hidden-files: true

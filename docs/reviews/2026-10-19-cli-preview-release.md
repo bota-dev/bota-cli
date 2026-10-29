@@ -34,7 +34,71 @@ remain independent gates. Third-party notices retain their own role.
 | Installed consumer | The actual tarball is installed into a temporary consumer through a generated lock followed by `npm ci --ignore-scripts`; lock bytes must remain unchanged. Installed version/help, hosted-mode help and one synthetic empty-scope identity read are checked, without login or a live API. Matched. |
 | Consumer isolation | Child environment uses an OS/runtime allowlist plus explicit temporary HOME/USERPROFILE, npm user/global config, cache and temporary directories. Proxy, provider, database/session, Node-option and inherited credential variables are excluded. Temporary cleanup verifies its resolved owned path. Matched. |
 | Exact prepared artifact | Source inputs, bundle, notices, package version and installed provenance are hashed. The receipt binds tarball SHA-256/SHA-512 to exact installed provenance bytes and the consumer lock/graph. The publication guard refuses changed files, paths escaping the source root and stale dirty-source receipts. Matched in synthetic tamper fixtures. |
-| Preview-only publication | One tag trigger, `v0.2.0-beta.*`; no release/dispatch trigger. Guard requires clean HEAD equal to `GITHUB_SHA`, exact tag/version agreement, source-license approval and exact-source release approval. The workflow publishes the tested `.tgz` with `--tag beta --provenance --ignore-scripts`; it cannot promote `latest`. Prepared; publication remains blocked. |
+| Channel-specific publication | One tag-triggered workflow; the source guard accepts `v0.2.0-beta.N` or a matching plain-semver stable version. Both Node cohorts qualify; the protected writer receives the exact inspected Node 24 archive. Beta preserves `latest`; a stable version publishes to `next`, then promotes the same version to `latest` only after authenticated registry/artifact/provenance/public-install readback. Source implementation is separate from activated publishing authority. |
+
+## Release contract
+
+CLI and local MCP share `@bota.dev/cli`; hosted MCP releases with the backend.
+The source remains MIT licensed. Public source visibility must match
+`https://github.com/bota-dev/bota-cli` for npm provenance. Source review,
+publication, docs-site delivery, backend activation and real login/MCP acceptance
+remain distinct cohorts. The current package candidate is not a released login
+feature merely because these workflows exist.
+
+The `Publish CLI` workflow qualifies the matching tagged source on Node 22.23.2
+and 24.19.0 with pinned npm 11.21.0. Qualification has no OIDC permission. Its
+Node 24 candidate, build metadata and installed-consumer receipt are transferred
+within the same workflow run; the protected writer verifies their hashes and
+uses that exact archive rather than rebuilding or repacking it.
+
+Before activation, maintainers must configure:
+
+- Public repository visibility, reviewed `main`, protected release tags and
+  required human reviewers for the `npm-cli-release` GitHub environment. The owner
+  may review a release they triggered after independent PR review; agent approval
+  is never a substitute.
+- npm trusted publisher: organization `bota-dev`, repository `bota-cli`, workflow
+  filename `publish.yml`, environment `npm-cli-release`, with **npm publish** and
+  **npm dist-tag** allowed. No persistent npm token fallback is used. npm 11.21.0
+  is required for OIDC dist-tag operations.
+- `CLI_PREVIEW_PUBLICATION_APPROVAL=<beta-version>@<commit>` for previews, or
+  `CLI_STABLE_PUBLICATION_APPROVAL=<stable-version>@<commit>` for stable releases,
+  plus `CLI_SOURCE_LICENSE_APPROVAL=MIT@<commit>` for that exact clean source.
+
+The writer requires the tagged commit to belong to `main`, current public
+repository identity and an unoccupied package version. `0.2.0-beta.N` publishes
+to `beta` without changing `latest`. A plain-semver stable release must move
+forward from `latest`; it first publishes to `next`. Stable is a distinct source
+version and archive, not a prerelease relabeled as stable.
+
+Public readback pins the source fields, fixed registry/tarball/attestation URLs,
+archive SHA-256/SHA-512, and installed bytes. A clean public consumer resolves a
+lock, installs with lifecycle scripts disabled, preserves lock bytes, checks
+CLI/local-MCP help and dependency licenses, and verifies npm registry signatures
+and attestations. The returned provenance bundle also undergoes Sigstore
+verification with the exact GitHub workflow/tag certificate identity and OIDC
+issuer. Its payload must identify the expected tarball, source commit and
+current run. Only then may a stable version move to `latest`.
+
+One workflow concurrency group serializes both channels. Each transition checks
+all observed dist-tags; unexpected changes refuse instead of overwriting or
+rolling them back. This is cooperative serialization, not a registry CAS or a
+claim against malicious maintainers. A publication or promotion is attempted
+once. Unknown acknowledgement, failed verification and cleanup remain nonzero;
+the retained receipt distinguishes attempted, acknowledged and verified state.
+Only the first workflow attempt can publish; GitHub reruns refuse even when an
+earlier attempt failed before a write. Configure all prerequisites before tagging.
+An occupied version is never silently adopted on rerun. Review its public state
+and receipt before deciding recovery; do not repeat a write on the assumption
+that failure meant no effect.
+
+Credential-free tests cover boundary predicates, malicious registry fields,
+occupied versions, source/tag/run mismatches, unexpected tag changes and fixed
+startup refusal. Both installed-candidate cohorts exercise exact shipped bytes.
+These checks do not emulate a successful npm publication or certify production
+Platform login. Trusted publisher/environment configuration, actual publication,
+public cryptographic readback and live deployment acceptance remain unverified
+until their respective real executions succeed.
 
 ## Verification and receipts
 
@@ -56,9 +120,11 @@ checks continue to refuse unapproved publication. No npm publish command is
 executed during qualification.
 
 The owning delivery receipt records final test counts, type/build checks,
-packed readbacks, source identity and hosted CI. The unavailable dedicated
-workflow-validator skill/actionlint is not claimed as run; local YAML parsing
-and structural checks plus independent workflow review cover the saved files.
+packed readbacks, source identity and hosted CI. The original review did not
+run a dedicated workflow-validator skill or actionlint; local YAML parsing,
+structural checks and independent review covered that source. Current release
+workflows additionally pass actionlint and executable release-boundary
+regressions; hosted publication remains a separate check.
 
 Exact source `89c5e3c` passed hosted types, 80 regressions, dependency licenses
 and the installed candidate check in run `39361611935`. Its final artifact
@@ -91,18 +157,18 @@ workflow dispatch or registry write is changed by licensing the source.
 
 ## Remaining gates
 
-1. Root must commit/push the licensed candidate, then rebuild and re-smoke the exact
-   clean source. Local working-tree artifacts honestly report `dirty: true`
-   and cannot be promoted as clean-source evidence.
-2. Configure/verify npm package ownership and the trusted publisher for this
-   repository/workflow.
-   Only after review, repository variables must approve the exact source:
-   `CLI_PREVIEW_PUBLICATION_APPROVAL=<version>@<commit>` and
-   `CLI_SOURCE_LICENSE_APPROVAL=<license>@<commit>`. No values were set here.
-3. Recheck registry version occupancy and dist-tags, then use the matching tag
-   and approved workflow execution,
-   registry tarball/integrity/provenance readback, normal public installation,
-   unchanged `latest`, and its own release receipt. Those remain unverified.
+1. Merge the reviewed source, then qualify its exact clean tagged commit on both
+   declared Node versions. Any artifact reporting `dirty: true` refuses
+   publication and cannot serve as clean-source evidence.
+2. Configure and verify the public source, npm package ownership, protected
+   environment/tags, human review and exact OIDC publisher/action permissions
+   described in the release contract. Exact-source preview or stable publication
+   approval and MIT approval remain mandatory. Source changes configure none of
+   these external controls.
+3. Recheck registry version occupancy and dist-tags, then run the matching tag's
+   approved workflow. Registry tarball/integrity/provenance readback, clean public
+   installation, channel-specific tag transitions and their retained receipt
+   require a real execution; synthetic fixtures do not qualify publication.
 4. Backend identity/integration/hosted-tool availability, docs-site promotion,
    and authorized live-principal smoke retain separate deployment/release gates.
    Help/import and synthetic identity evidence do not qualify live MCP operations.

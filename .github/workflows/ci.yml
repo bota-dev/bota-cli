@@ -13,8 +13,13 @@ permissions:
   contents: read
 
 jobs:
-  ci:
+  qualify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.23.2', '24.19.0']
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -22,11 +27,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '24'
-          cache: 'npm'
+          node-version: ${{ matrix.node }}
+
+      - name: Pin release tooling
+        run: npm install --global npm@11.21.0 --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Type check
         run: npm run type-check
@@ -43,10 +50,22 @@ jobs:
       - name: Retain candidate and local qualification receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cli-candidate-${{ github.sha }}
+          name: cli-candidate-${{ github.sha }}-node${{ matrix.node }}
           path: |
             .release/*.tgz
             .release/package-receipt.json
             .release/consumer/*.json
           if-no-files-found: error
           include-hidden-files: true
+
+  # Preserve the external ci status while requiring both runtime cohorts.
+  ci:
+    if: ${{ always() }}
+    needs: qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every runtime qualification to succeed
+        env:
+          QUALIFICATION_RESULT: ${{ needs.qualify.result }}
+        run: test "$QUALIFICATION_RESULT" = success
