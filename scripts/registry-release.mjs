@@ -70,7 +70,12 @@ export function assertRegistryManifest(manifest, pkg, receipt, tarball) {
   // aliases, optional dependencies, bins, overrides or alternate entrypoints.
   const additions = new Set(['_id', '_rev', '_npmVersion', '_nodeVersion', '_npmUser', '_npmOperationalInternal', '_hasShrinkwrap', '_integrity', '_resolved', '_from', 'gitHead', 'dist', 'maintainers', 'readme', 'readmeFilename', 'time', 'directories']);
   for (const key of Object.keys(manifest)) check(Object.hasOwn(pkg, key) || additions.has(key), 'unexpected registry manifest field');
-  for (const [key, value] of Object.entries(pkg)) check(equal(manifest[key], value), 'registry package fields differ from the inspected source');
+  // npm omits the packing-only files directive from public metadata. The exact
+  // tarball and installed manifest still have to match the inspected artifact.
+  for (const [key, value] of Object.entries(pkg)) {
+    if (key === 'files' && !Object.hasOwn(manifest, key)) continue;
+    check(equal(manifest[key], value), 'registry package fields differ from the inspected source');
+  }
   if (!Object.hasOwn(pkg, 'directories') && Object.hasOwn(manifest, 'directories')) check(equal(manifest.directories, {}), 'unexpected registry directories');
   check(manifest.name === receipt.name && manifest.version === receipt.version, 'registry version identity');
   check(manifest.dist.tarball === `${registry}/${packageName}/-/cli-${pkg.version}.tgz`, 'tarball origin or path');
@@ -115,11 +120,19 @@ export async function assertInstalledPackage(consumer, root, pkg) {
 }
 
 async function boundedRead(url, maxBytes, signal) {
-  const response = await fetch(url, { redirect: 'error', credentials: 'omit', signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]), headers: { accept: 'application/json' } });
+  const response = await fetch(url, { redirect: 'error', credentials: 'omit', cache: 'no-store', signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]), headers: { accept: 'application/json', 'cache-control': 'no-cache' } });
   check(response.status === 200, 'public registry or source read');
   const chunks = []; let size = 0;
   for await (const chunk of response.body) { size += chunk.length; check(size <= maxBytes, 'public response size'); chunks.push(chunk); }
   return Buffer.concat(chunks);
+}
+
+export async function readRegistryMetadata(context, ordinal, signal) {
+  check(/^[1-9][0-9]{0,19}$/.test(context.run ?? '') && context.attempt === '1' && Number.isSafeInteger(ordinal) && ordinal >= 0, 'registry read identity');
+  // Reusing the preflight URL can return its cached, pre-publication packument
+  // after an acknowledged publish. Each bounded read has its own cache key.
+  const url = `${registry}/@bota.dev%2fcli?verification=${context.run}-${context.attempt}-${ordinal}`;
+  return JSON.parse(await boundedRead(url, 12 * 1024 * 1024, signal));
 }
 
 function run(command, args, cwd, env, signal) {
@@ -175,8 +188,8 @@ async function main() {
     check(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN && /^https:\/\/[a-zA-Z0-9.-]+\.actions\.githubusercontent\.com\//.test(process.env.ACTIONS_ID_TOKEN_REQUEST_URL ?? ''), 'OIDC availability');
     const source = JSON.parse(await boundedRead(`https://api.github.com/repos/${repository}`, 128 * 1024, controller.signal));
     check(source.private === false && source.id === 1245303387 && source.full_name === repository && source.owner?.id === 252373912, 'public source identity');
-    const packumentUrl = `${registry}/@bota.dev%2fcli`;
-    const readRegistry = async () => JSON.parse(await boundedRead(packumentUrl, 12 * 1024 * 1024, controller.signal));
+    let registryReadOrdinal = 0;
+    const readRegistry = () => readRegistryMetadata(context, registryReadOrdinal++, controller.signal);
     result.phase = 'registry-preflight';
     const before = assertUnoccupiedVersion(await readRegistry(), pkg.version);
     Object.assign(result, { package: { name: pkg.name, version: pkg.version }, channel, source: context, candidate_receipt_sha256: sha256(receiptBytes), tarball_sha256: receipt.sha256, tags_before: before, npm: npmVersion });
