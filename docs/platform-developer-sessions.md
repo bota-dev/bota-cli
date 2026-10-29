@@ -1,13 +1,18 @@
 # Platform developer sessions
 
-This is the source-preview command contract. Default production Platform login
-remains **configuration off**: `getProductionDeveloperDeployment()` refuses with
+This guide describes the `0.2.0-beta.0` command cohort. Verify the exact installed
+release and its public registry provenance; historical npm `0.1.0` does not
+provide this workflow. Package publication, selected deployment readiness and a
+successful live account journey are separate checks.
+
+Without an explicit deployment selector, the default remains **configuration
+off**: `getProductionDeveloperDeployment()` refuses with
 `developer_configuration_unavailable` before opening native storage, a callback
 listener, browser or network request. Explicit `--developer-deployment dev` or
 `--developer-deployment prod` selects a fixed reviewed source candidate through
 the actual service and protected native factory. No argument, environment variable or saved profile can
-supply arbitrary deployment endpoints. The candidate CLI is unpublished;
-historical public npm `0.1.0` does not provide this workflow.
+supply arbitrary deployment endpoints. Qualifying or activating an explicit
+deployment does not change the configuration-off default.
 
 The implementation separates a Platform user's delegated session from project
 API keys and customer end-user tokens. Existing API-key login, environment
@@ -35,9 +40,8 @@ issuer `https://api.bota.dev`, native client `bota-cli-prod-v1`, the same three
 OAuth paths, REST audience `https://api.bota.dev/v1` and MCP audience
 `https://api.bota.dev/mcp`. It uses both literal callback templates, S256, both
 grant resources and an explicit `negative-fence-v1` recovery selection. Production
-consent belongs to `https://platform.bota.dev`. Ordinary Platform users enroll
-through their existing project permissions and scope consent; an individual
-developer needs no global operator grant or manual Bota approval.
+consent belongs to `https://platform.bota.dev`. Enrollment is self-service within
+existing project permissions and scope consent.
 
 This source selection does not prove active deployment, Portal configuration or
 real account consent. The actual coordinator performs these steps:
@@ -55,8 +59,9 @@ real account consent. The actual coordinator performs these steps:
    family and finish journaled local adoption. Join callback/native cleanup
    before reporting success.
 
-These are the source-prepared DEV commands. Repeat the fixed DEV selector for
-every invocation; omitting it still refuses production configuration at step zero:
+Use these DEV commands with a matching CLI and qualified deployment. Repeat the
+fixed DEV selector for every invocation; omitting it uses the configuration-off
+default:
 
 ```bash
 bota --developer-deployment dev auth login --name dev-work --scope devices:read --scope recordings:read
@@ -66,8 +71,9 @@ bota --developer-deployment dev --developer-profile dev-work auth status --json
 bota --developer-deployment dev --developer-profile dev-work mcp --mode hosted
 ```
 
-The corresponding source-prepared production commands use the explicit PROD
-selector on every invocation:
+Use the corresponding production commands when the selected PROD ingress,
+Portal and resource admission are qualified. Repeat the explicit PROD selector
+on every invocation:
 
 ```bash
 bota --developer-deployment prod auth login --name prod-work --scope devices:read --scope recordings:read
@@ -222,7 +228,8 @@ sandbox or evidence of a configured native login. The preload is not shipped.
 
 Real acceptance requires the reviewed native source/runtime cohort, exact trusted
 server/client configuration, deployed ingress/Portal/resource acceptance and a
-real Platform-account end-to-end receipt. DEV source selection does not complete
-these checks or activate cloud resources. Default production configuration stays
-off. The existing guarded installed consumer checks that unchanged default path;
+real Platform-account end-to-end receipt. A source selector does not complete
+these checks or activate cloud resources. Omitting the deployment selector keeps
+the configuration-off default, independently of explicit deployment readiness.
+The existing guarded installed consumer checks that unchanged default path;
 it does not qualify configured DEV native bootstrap or a live login.
