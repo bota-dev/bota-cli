@@ -120,9 +120,11 @@ checks continue to refuse unapproved publication. No npm publish command is
 executed during qualification.
 
 The owning delivery receipt records final test counts, type/build checks,
-packed readbacks, source identity and hosted CI. The unavailable dedicated
-workflow-validator skill/actionlint is not claimed as run; local YAML parsing
-and structural checks plus independent workflow review cover the saved files.
+packed readbacks, source identity and hosted CI. The original review did not
+run a dedicated workflow-validator skill or actionlint; local YAML parsing,
+structural checks and independent review covered that source. Current release
+workflows additionally pass actionlint and executable release-boundary
+regressions; hosted publication remains a separate check.
 
 Exact source `89c5e3c` passed hosted types, 80 regressions, dependency licenses
 and the installed candidate check in run `39361611935`. Its final artifact
@@ -156,8 +158,8 @@ workflow dispatch or registry write is changed by licensing the source.
 ## Remaining gates
 
 1. Merge the reviewed source, then qualify its exact clean tagged commit on both
-   declared Node versions. Local working-tree artifacts honestly report
-   `dirty: true` and cannot be promoted as clean-source evidence.
+   declared Node versions. Any artifact reporting `dirty: true` refuses
+   publication and cannot serve as clean-source evidence.
 2. Configure and verify the public source, npm package ownership, protected
    environment/tags, human review and exact OIDC publisher/action permissions
    described in the release contract. Exact-source preview or stable publication
