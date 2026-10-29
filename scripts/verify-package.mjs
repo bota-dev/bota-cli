@@ -5,9 +5,11 @@ import { once } from 'node:events';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { assertInstalledPackage, assertRegistryManifest } from './registry-release.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npmCli = process.env.npm_execpath;
@@ -47,6 +49,14 @@ try {
   const tarball = join(artifact, packed.filename);
   const bytes = await readFile(tarball);
   assert.equal(`sha512-${createHash('sha512').update(bytes).digest('base64')}`, packed.integrity);
+  // Exercise npm's actual tarball-manifest normalization. The registry fields
+  // below are a synthetic projection only, not published provenance evidence.
+  const normalized = await createRequire(npmCli)('pacote').manifest(tarball, {
+    cache: join(temporary, 'manifest-cache'), fullMetadata: true, fullReadJson: true,
+  });
+  assertRegistryManifest({ ...normalized, dist: { tarball: `https://registry.npmjs.org/@bota.dev/cli/-/cli-${pkg.version}.tgz`, integrity: packed.integrity,
+    attestations: { url: `https://registry.npmjs.org/-/npm/v1/attestations/@bota.dev%2fcli@${pkg.version}`, provenance: { predicateType: 'https://slsa.dev/provenance/v1' } } } },
+  pkg, { name: pkg.name, version: pkg.version, integrity: packed.integrity, sha256: sha256(bytes) }, bytes);
   await copyFile(tarball, join(temporary, packed.filename));
   const manifest = { name: 'bota-cli-packed-consumer', version: '0.0.0', private: true, dependencies: { [pkg.name]: `file:../${packed.filename}` } };
   await writeFile(join(consumer, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -56,6 +66,14 @@ try {
   await npm(['ci', '--ignore-scripts', '--no-audit', '--no-fund']);
   assert.deepEqual(await readFile(join(consumer, 'package-lock.json')), frozenLock, 'frozen consumer installation cannot rewrite its lock');
   const installed = JSON.parse(await readFile(join(consumer, 'node_modules/@bota.dev/cli/package.json'), 'utf8'));
+  await assertInstalledPackage(consumer, root, pkg);
+  // This genuine consumer installs the CLI from a file, so npm excludes that
+  // local package from registry verification. Its public dependency graph must
+  // nevertheless pass the same no-missing/no-invalid signature gate used later.
+  const publicSignatureBytes = (await npm(['audit', 'signatures', '--json', '--include-attestations'])).stdout;
+  const publicSignatures = JSON.parse(publicSignatureBytes);
+  assert.deepEqual(publicSignatures.invalid, []); assert.deepEqual(publicSignatures.missing, []);
+  assert.ok(Array.isArray(publicSignatures.verified));
   assert.equal(installed.version, pkg.version); assert.deepEqual(installed.dependencies, pkg.dependencies);
   assert.equal(installed.license, pkg.license, 'installed source-license identifier must match the package manifest');
   if (provenance.source_license) {
@@ -188,12 +206,15 @@ try {
     node: process.version, npm: (await npm(['--version'])).stdout.trim(),
     consumer_environment_keys: Object.keys(env).sort(),
     consumer_lock_sha256: createHash('sha256').update(frozenLock).digest('hex'), resolved_dependencies: resolved,
+    public_dependency_signatures: { npm: (await npm(['--version'])).stdout.trim(), audit_sha256: sha256(publicSignatureBytes),
+      invalid: 0, missing: 0, verified_attestations: publicSignatures.verified.length,
+      scope: 'Public dependencies of the genuine file-installed CLI; the local CLI itself is not registry/provenance qualified.' },
     developer_configuration_off: { guard_sha256: sha256(await readFile(guard)), probes: developerProbes,
       scope: 'Installed production entrypoint and unchanged trusted resolver; guarded effect-attempt evidence, not actual native qualification.',
       limits: ['Node module-loader reads, six exact public Linux is-wsl/container metadata paths, parent installation/temporary cleanup and the captured guard-report writer are permitted.',
         'No adversarial-sandbox claim for direct internal bindings, previously captured runtime internals, process.exit or OS/runtime startup effects.',
         'Existing temporary HOME isolates legacy config only; no new native root, credential-store or endpoint redirection.'] },
-    checks: ['installed-version', 'source-version', 'installed-source-license', 'installed-help', 'installed-hosted-mode-help', 'installed-secure-profile-help-no-native-bootstrap',
+    checks: ['packed-npm-manifest-policy-synthetic-registry-fields', 'installed-exact-file-bytes', 'public-dependency-registry-signatures', 'installed-version', 'source-version', 'installed-source-license', 'installed-help', 'installed-hosted-mode-help', 'installed-secure-profile-help-no-native-bootstrap',
       'installed-secure-selector-refusal', 'installed-secure-origin-refusal-before-storage', 'synthetic-empty-scope-identity',
       'installed-secure-migration-explicit-input',
       'installed-environment-profile-enrollment', 'installed-profile-status-one-preflight', 'installed-profile-local-list-removal',

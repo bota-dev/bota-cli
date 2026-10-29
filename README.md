@@ -19,7 +19,11 @@ npm install -g @bota.dev/cli@0.1.0
 
 Candidate packaging and release requirements are recorded in the
 [preview release review](https://github.com/bota-dev/bota-cli/blob/main/docs/reviews/2026-10-19-cli-preview-release.md).
-Any future preview publication uses `beta`; it must not move `latest`.
+Preview publication uses `beta` and preserves `latest`. A stable release uses a
+new plain-semver package version, first publishes to `next`, then promotes that
+same version to `latest` only after authenticated public package verification.
+Local MCP is included in this package and follows its release; hosted MCP and
+Platform login availability retain their own backend deployment/live acceptance.
 
 ## Authentication
 
@@ -406,8 +410,10 @@ each file retain their existing ordering, including real timeout, cancellation
 and signal-relay checks. Fixtures use separate temporary homes and loopback ports.
 
 `verify:package` creates a tarball and receipt under `.release/`, resolves an
-isolated consumer lock, and installs it with `npm ci --ignore-scripts`. It runs
-the installed command's version/help, hosted-mode help, legacy identity read,
+isolated consumer lock, and installs it with `npm ci --ignore-scripts`. Its public
+dependency graph must pass registry signature verification; the file-installed
+CLI itself is excluded and remains unpublished/unverified. It runs the installed
+command's version/help, hosted-mode help, legacy identity read,
 profile enrollment/status and credential-free metadata list/removal against
 synthetic loopback fixtures. It uses temporary homes and npm configuration with
 inherited credentials removed. The root dependency lock remains unchanged.
@@ -417,11 +423,37 @@ are excluded. The candidate metadata records source dirtiness honestly.
 Transitive dependency ranges are not globally frozen for future consumers;
 the receipt records the exact graph used by this installed-consumer check.
 
-Packed consumers verify the manifest's MIT identifier, exact `LICENSE` bytes
-and provenance digest. The publication guard still requires a
-clean source commit matching `GITHUB_SHA`, a matching `v0.2.0-beta.N` tag and
-package version, and exact-source repository approval variables. It publishes
-the already-tested tarball with provenance. No tag, release, dispatch, registry
-publication or production action is part of preparing this candidate.
+Packed consumers verify the manifest's MIT identifier, exact `LICENSE` bytes,
+all shipped file bytes and provenance digest. CI and tag qualification run on
+Node 22.23.2 and 24.19.0 with npm 11.21.0. The protected `npm-cli-release` job
+receives the already-inspected Node 24 tarball from that workflow run and
+requires a clean tag source that belongs to `main`, matching source/version and
+exact-source publication/license approvals. Public source visibility, protected
+release tags, human environment review and npm's exact workflow/environment OIDC
+binding must be configured before activation; preparing source does not configure
+them. A reviewer may approve their own triggered release after independent PR
+review; an agent must never supply human approval.
+
+`npm run release:registry` is the write-capable CI entrypoint. It refuses occupied
+versions and unexpected registry tag changes, excludes inherited credentials,
+and refuses TLS/proxy/preload overrides. It publishes the inspected tarball once using OIDC, reads back the exact
+public tarball and manifest, installs through a fresh frozen consumer lock, and
+checks installed CLI/MCP help and dependency licenses. The pinned npm signature
+verifier and Sigstore identity policy authenticate provenance for the exact
+repository, tag, workflow, commit, run and tarball. Beta leaves `latest` unchanged;
+stable promotes to `latest` only after those checks. Dist-tag transitions use
+serialized cooperative writers and fresh readbacks; the registry provides no CAS.
+
+The write-capable job admits only the first workflow attempt; GitHub reruns
+refuse even when an earlier attempt failed before a write. Configure and review
+release prerequisites before creating a tag. The publication receipt records
+acknowledgement/unknown states separately from
+successful readback. A lost response or failed verification never triggers an
+automatic republish, tag rollback or adoption of an occupied version. Retain the
+receipt and inspect public state before reviewing recovery. Registry publication
+does not qualify live Platform login or hosted business operations. No tag,
+release, dispatch, registry publication or production action is part of preparing
+this candidate. See the [release contract](https://github.com/bota-dev/bota-cli/blob/main/docs/reviews/2026-10-19-cli-preview-release.md#release-contract)
+for the exact activation gates and approval variables.
 
 Contract regressions use loopback fixtures and synthetic credentials. They exercise real command parsing/exit codes, backend request fields, page cursors, MCP JSON/SSE errors and local-tool compatibility. Hosted-preview fixtures cover principal-dependent discovery, full result/schema preservation, fresh admission, redirects, cancellation, shutdown, a real 30-second deadline, and one attempted tool invocation after a lost response. Manual-listener subprocess tests verify HMAC signatures over the original body and `X-Bota-Signature`, `X-Bota-Timestamp`, and `X-Bota-Event-Id` forwarding, credential-free startup, fixed logs, rejection paths, and joined SIGINT/SIGTERM handlers. On Windows, a test-only IPC relay delivers those signals inside the subprocess. No test contacts Bota Platform or creates a public tunnel. These checks do not call a live project, establish webhook-management availability, publish a package, or qualify a physical device.

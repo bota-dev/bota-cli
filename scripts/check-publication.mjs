@@ -4,9 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export function assertPublicationPrerequisites({ pkg, commit, dirty, tag, githubSha, releaseApproval, licenseApproval, licenseText, provenance }) {
+export function releaseChannel(version) {
+  if (typeof version !== 'string' || version.length > 100 || version.split(/[.-]/).filter(value => /^[0-9]+$/.test(value)).some(value => !Number.isSafeInteger(Number(value)))) throw new Error('Publication blocked: unsupported release version.');
+  if (/^0\.2\.0-beta\.(0|[1-9][0-9]*)$/.test(version)) return 'beta';
+  if (/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)) return 'stable';
+  throw new Error('Publication blocked: unsupported release version.');
+}
+
+export function assertPublicationPrerequisites({ pkg, commit, dirty, tag, githubSha, releaseApproval, licenseApproval, licenseText, provenance, channel = 'beta' }) {
   if (!pkg.license || pkg.license === 'UNLICENSED' || !licenseText?.trim()) throw new Error('Publication blocked: CLI source license decision and LICENSE are required.');
-  if (!/^0\.2\.0-beta\.\d+$/.test(pkg.version) || tag !== `v${pkg.version}`) throw new Error('Publication blocked: preview tag must match the package beta version.');
+  if (releaseChannel(pkg.version) !== channel || tag !== `v${pkg.version}`) throw new Error('Publication blocked: release tag, channel and package version must match.');
   if (dirty || !/^[0-9a-f]{40}$/.test(commit) || commit !== githubSha) throw new Error('Publication blocked: clean checkout HEAD must equal GITHUB_SHA.');
   if (releaseApproval !== `${pkg.version}@${commit}` || licenseApproval !== `${pkg.license}@${commit}`) throw new Error('Publication blocked: exact-source release and source-license approvals are required.');
   if (provenance?.source?.commit !== commit || provenance.source.dirty || provenance.package?.name !== pkg.name || provenance.package?.version !== pkg.version || provenance.source_license?.identifier !== pkg.license) throw new Error('Publication blocked: package provenance must match the approved clean source.');
@@ -39,12 +46,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try { provenance = JSON.parse(await readFile(resolve(root, 'dist/release.json'), 'utf8')); } catch { /* Checked below. */ }
   const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   try {
+    const channel = releaseChannel(pkg.version);
     assertPublicationPrerequisites({ pkg, commit: git(['rev-parse', 'HEAD']), dirty: Boolean(git(['status', '--porcelain', '--untracked-files=all'])),
       tag: process.env.GITHUB_REF_NAME, githubSha: process.env.GITHUB_SHA,
-      releaseApproval: process.env.CLI_PREVIEW_PUBLICATION_APPROVAL, licenseApproval: process.env.CLI_SOURCE_LICENSE_APPROVAL,
-      licenseText, provenance });
+      releaseApproval: channel === 'beta' ? process.env.CLI_PREVIEW_PUBLICATION_APPROVAL : process.env.CLI_STABLE_PUBLICATION_APPROVAL,
+      licenseApproval: process.env.CLI_SOURCE_LICENSE_APPROVAL, channel, licenseText, provenance });
     const receipt = JSON.parse(await readFile(resolve(root, '.release/package-receipt.json'), 'utf8'));
     await assertPreparedArtifact(root, provenance, receipt);
-    console.log('Exact-source preview publication prerequisites passed. Registry/OIDC acceptance remains separate.');
+    console.log('Exact-source publication prerequisites passed. Registry/OIDC acceptance remains separate.');
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
