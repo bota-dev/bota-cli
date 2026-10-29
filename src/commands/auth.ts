@@ -18,11 +18,12 @@ export function registerAuth(program: Command, developer: DeveloperProfileServic
     .option('--name <name>', 'New local developer profile name', 'default')
     .option('--scope <scope>', 'Explicit requested developer read scope; repeat for multiple scopes', (scope: string, selected: string[]) => [...selected, scope], [])
     .option('--identity-only', 'Explicitly request identity without business-read scopes')
+    .option('--no-browser', 'Print the authorization URL to stderr instead of opening a browser')
     .allowExcessArguments(false)
-    .action(async (key: string | undefined, options: { name: string; scope: string[]; identityOnly?: boolean }) => {
+    .action(async (key: string | undefined, options: { name: string; scope: string[]; identityOnly?: boolean; browser?: boolean }) => {
       const globalOpts = program.opts();
       if (key) {
-        if (globalOpts['developerProfile'] !== undefined || globalOpts['developerDeployment'] !== undefined || options.name !== 'default' || options.scope.length || options.identityOnly) throw new DeveloperProfileError('developer_profile_invalid');
+        if (globalOpts['developerProfile'] !== undefined || globalOpts['developerDeployment'] !== undefined || options.name !== 'default' || options.scope.length || options.identityOnly || options.browser === false) throw new DeveloperProfileError('developer_profile_invalid');
         const apiUrl = getApiUrl(globalOpts['apiUrl'] as string | undefined);
         // Headless / CI path: accept key directly
         if (!key.startsWith('sk_live_') && !key.startsWith('sk_test_')) {
@@ -45,7 +46,7 @@ export function registerAuth(program: Command, developer: DeveloperProfileServic
         const scopes = await chooseDeveloperScopes(options, signal);
         const profile = await developer.login(selectedName ?? options.name, { resourceKind: deployment.client.resourceKinds.includes('rest') ? 'rest' : 'mcp',
           grantResourceKinds: deployment.client.resourceKinds, scopes,
-          loopbackHost: deployment.client.redirectUris.includes('http://127.0.0.1/oauth/callback') ? '127.0.0.1' : '::1' }, { signal });
+          loopbackHost: deployment.client.redirectUris.includes('http://127.0.0.1/oauth/callback') ? '127.0.0.1' : '::1' }, { signal, ...(options.browser === false ? { browser: false } : {}) });
         await publishDeveloperMetadata(developerProfileProjection(profile), signal, write);
         if (!globalOpts['json']) { const selectedDeployment = globalOpts['developerDeployment'];
           const deploymentOption = selectedDeployment === 'dev' || selectedDeployment === 'prod' ? `--developer-deployment ${selectedDeployment} ` : '';

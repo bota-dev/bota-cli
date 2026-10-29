@@ -1,15 +1,17 @@
 /** Portable source orchestration only: memory ports are NOT native custody. */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { Writable } from 'node:stream';
 import { createDeveloperProfileServiceForTrustedPorts } from '../src/developer-profile-service.ts';
-import { developerProfileFailure } from '../src/developer-profile-error.ts';
+import { DeveloperProfileError, developerProfileFailure } from '../src/developer-profile-error.ts';
 import { parseDelegatedLoginDeployment } from '../src/delegated-login.ts';
 import { DelegatedFamilyEngine, createTrustedDelegatedEnrollmentHandoff } from '../src/delegated-family-engine.ts';
 import { familyKeyOf } from '../src/delegated-family-state.ts';
 import { BotaClient } from '../src/client.ts';
 import { printJson, errorDetails } from '../src/output.ts';
 import { getSelectedDeveloperDeployment, withDeveloperDeploymentSelection } from '../src/developer-deployment-selection.ts';
+import { writeDeveloperWritableOutput } from '../src/developer-output-acknowledgement.ts';
 
 const deployment = parseDelegatedLoginDeployment({ version: 1, issuer: 'https://issuer.example.test', endpoints: {
   authorization: 'https://issuer.example.test/oauth/authorize', token: 'https://issuer.example.test/oauth/token', revocation: 'https://issuer.example.test/oauth/revoke' },
@@ -103,12 +105,156 @@ test('real code-only loopback waits for both custody acknowledgements and adopts
   assert.equal(profile.state, 'ready'); assert.equal(f.tokenPosts, 1); assert.equal(f.browsers, 1);
   assert.deepEqual(f.calls, ['reserve', 'proof-retained', 'browser', 'refresh-retained', 'adopt']);
   assert.equal(f.initial.size + f.proofs.size, 0); assert.equal(f.secrets.size, 1);
+  assert.equal(f.output.length, 0);
   assert.equal(f.context.signal.aborted, true); assert.throws(() => f.context.budget.assertActive());
+});
+
+function manualTarget(f, channel, text) {
+  assert.equal(channel, 'stderr'); assert.equal(f.browsers, 0); assert.equal(f.closes, 0);
+  const lines = text.trimEnd().split('\n'); assert.equal(lines.length, 2);
+  assert.equal(lines[0], 'Open this URL in a browser on this computer to complete Platform login:');
+  const target = new URL(lines[1]), proof = f.proofs.get(target.searchParams.get('enrollment_attempt'));
+  assert.ok(proof); assert.equal(f.profile.state, 'proof-ready');
+  assert.equal(target.origin, deployment.issuer);
+  assert.equal(target.searchParams.get('redirect_uri'), proof.redirectUri);
+  assert.equal(target.searchParams.get('code_challenge'), createHash('sha256').update(proof.pkceVerifier, 'ascii').digest('base64url'));
+  assert.equal(target.searchParams.get('recovery_challenge'), createHash('sha256').update(proof.recoveryVerifier, 'ascii').digest('base64url'));
+  assert.ok(!text.includes(proof.pkceVerifier) && !text.includes(proof.recoveryVerifier));
+  assert.deepEqual([...target.searchParams.keys()].sort(), ['client_id', 'code_challenge', 'code_challenge_method', 'enrollment_attempt', 'recovery_challenge', 'recovery_challenge_method', 'redirect_uri', 'resource', 'resource', 'response_type', 'scope', 'state'].sort());
+  f.calls.push('manual-url'); return target;
+}
+async function manualCallback(target) {
+  const callback = new URL(target.searchParams.get('redirect_uri'));
+  callback.searchParams.set('code', secret('c')); callback.searchParams.set('state', target.searchParams.get('state'));
+  const response = await fetch(callback); assert.equal(response.status, 200); await response.body.cancel();
+}
+const enteredOrSettled = (entered, running) => Promise.race([entered.promise, running.then(() => { throw Error('Expected an owned pending handoff.'); })]);
+
+test('manual browser handoff uses the real retained loopback attempt and waits for stderr acknowledgement before exchange', { timeout: 5_000 }, async t => {
+  const f = await fixture(false), entered = defer(), release = defer(), output = [], parent = new AbortController();
+  const service = createDeveloperProfileServiceForTrustedPorts({ ...f.ports, async writeOutput(channel, text) {
+    output.push({ channel, text }); const target = manualTarget(f, channel, text);
+    await manualCallback(target); entered.resolve(); await release.promise;
+  } });
+  const running = service.login('work', selection, { browser: false, signal: parent.signal }); void running.catch(() => {});
+  t.after(async () => { parent.abort(); release.resolve(); await running.catch(() => {}); });
+  await enteredOrSettled(entered, running); assert.equal(f.tokenPosts, 0); assert.equal(f.proofs.size, 1); assert.equal(f.closes, 0);
+  release.resolve(); const profile = await running;
+  assert.equal(profile.state, 'ready'); assert.equal(f.tokenPosts, 1); assert.equal(f.browsers, 0); assert.equal(f.closes, 1);
+  assert.equal(f.proofs.size + f.initial.size, 0); assert.deepEqual(output.map(value => value.channel), ['stderr']);
+  assert.deepEqual(f.calls, ['reserve', 'proof-retained', 'manual-url', 'refresh-retained', 'adopt']);
+});
+
+test('manual authorization URL is withheld until the matching custody acknowledgement', { timeout: 5_000 }, async t => {
+  const f = await fixture(false), entered = defer(), release = defer(), parent = new AbortController(); let writes = 0;
+  const retention = f.runtime.retentionPort;
+  f.runtime.retentionPort = name => ({ async retain(binding, ctx) {
+    const receipt = await retention(name).retain(binding, ctx); entered.resolve(); await release.promise; return receipt;
+  } });
+  const service = createDeveloperProfileServiceForTrustedPorts({ ...f.ports, async writeOutput(channel, text) {
+    writes++; await manualCallback(manualTarget(f, channel, text));
+  } });
+  const running = service.login('work', selection, { browser: false, signal: parent.signal }); void running.catch(() => {});
+  t.after(async () => { parent.abort(); release.resolve(); await running.catch(() => {}); });
+  await enteredOrSettled(entered, running); assert.equal(writes + f.browsers + f.tokenPosts, 0);
+  release.resolve(); assert.equal((await running).state, 'ready'); assert.equal(writes, 1);
+});
+
+test('refused or mismatched custody acknowledgement withholds manual URL and joins cleanup without exchanging', async () => {
+  for (const mode of ['mismatch', 'refused', 'failed']) {
+    const f = await fixture(false); let writes = 0; const retention = f.runtime.retentionPort;
+    f.runtime.retentionPort = name => ({ async retain(binding, ctx) {
+      await retention(name).retain(binding, ctx);
+      if (mode === 'failed') throw Error('PRIVATE_RETENTION');
+      return { status: mode === 'refused' ? 'unknown' : 'retained', attemptId: mode === 'mismatch' ? randomUUID() : binding.attemptId };
+    } });
+    const service = createDeveloperProfileServiceForTrustedPorts({ ...f.ports, async writeOutput() { writes++; } });
+    await assert.rejects(service.login('work', selection, { browser: false }), fixed('developer_operation_failed'));
+    assert.equal(writes + f.browsers + f.tokenPosts, 0); assert.equal(f.closes, 1); assert.equal(f.proofs.size, 1);
+  }
+});
+
+test('manual output failures retain proof and never fall back to launching a browser', async () => {
+  for (const failure of [Error('PRIVATE_WRITER'), new DeveloperProfileError('developer_output_failed')]) {
+    const f = await fixture(false); let writes = 0, originalProof, recoveredProof;
+    const service = createDeveloperProfileServiceForTrustedPorts({ ...f.ports,
+      async fetch(url, options) { if (String(url) === deployment.endpoints.revocation) recoveredProof = new URLSearchParams(options.body); return f.ports.fetch(url, options); },
+      async writeOutput(channel, text) {
+      writes++; const target = manualTarget(f, channel, text); originalProof = structuredClone(f.proofs.get(target.searchParams.get('enrollment_attempt')));
+      await manualCallback(target); throw failure;
+    } });
+    await assert.rejects(service.login('work', selection, { browser: false }), error => {
+      assert.ok(['developer_output_failed', 'developer_operation_failed'].includes(developerProfileFailure(error)?.code));
+      assert.equal(developerProfileFailure(error).recovery_required, true);
+      assert.doesNotMatch(error.message + JSON.stringify(error), /PRIVATE_|code_challenge|recovery_challenge|verifier/); return true;
+    });
+    assert.equal(writes, 1); assert.equal(f.browsers + f.tokenPosts, 0); assert.equal(f.proofs.size, 1); assert.equal(f.closes, 1);
+    assert.ok(JSON.stringify(f.proofs.get(originalProof.attemptId)) === JSON.stringify(originalProof));
+    assert.equal((await service.recover('work')).state, 'removed');
+    assert.equal(f.revokePosts, 1); assert.equal(f.proofs.size, 0); assert.equal(f.browsers + f.tokenPosts, 0);
+    assert.ok(recoveredProof.get('token') === originalProof.recoveryVerifier && recoveredProof.get('code_verifier') === originalProof.pkceVerifier);
+    assert.ok(recoveredProof.get('bota_enrollment_attempt') === originalProof.attemptId && recoveredProof.get('redirect_uri') === originalProof.redirectUri);
+  }
+});
+
+test('cancelling a pending manual handoff closes the callback and retains proof despite late output completion', { timeout: 5_000 }, async t => {
+  const f = await fixture(false), entered = defer(), release = defer(), parent = new AbortController(); let target, success = false;
+  const service = createDeveloperProfileServiceForTrustedPorts({ ...f.ports, async writeOutput(channel, text) {
+    target = manualTarget(f, channel, text); entered.resolve(); await release.promise;
+  } });
+  const running = service.login('work', selection, { browser: false, signal: parent.signal }).then(value => { success = true; return value; });
+  t.after(async () => { parent.abort(); release.resolve(); await running.catch(() => {}); });
+  void running.catch(() => {}); await enteredOrSettled(entered, running); parent.abort('PRIVATE_CANCEL');
+  await assert.rejects(running, fixed('developer_cancelled'));
+  assert.equal(f.closes, 1); assert.equal(f.proofs.size, 1); assert.equal(f.browsers + f.tokenPosts, 0);
+  await assert.rejects(fetch(target.searchParams.get('redirect_uri')));
+  release.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(success, false); assert.equal(f.tokenPosts, 0); assert.equal(f.proofs.size, 1);
+});
+
+test('manual handoff keeps the original service deadline and never revives after a late writer', { timeout: 5_000 }, async t => {
+  const f = await fixture(false), entered = defer(), release = defer(), parent = new AbortController(); let success = false;
+  const service = createDeveloperProfileServiceForTrustedPorts({ ...f.ports, async writeOutput(channel, text) {
+    manualTarget(f, channel, text); entered.resolve(); await release.promise;
+  } });
+  const running = service.login('work', selection, { browser: false, timeoutMs: 300, signal: parent.signal }).then(value => { success = true; return value; });
+  t.after(async () => { parent.abort(); release.resolve(); await running.catch(() => {}); });
+  void running.catch(() => {}); await enteredOrSettled(entered, running); await assert.rejects(running, fixed('developer_deadline'));
+  release.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(success, false); assert.equal(f.closes, 1); assert.equal(f.browsers + f.tokenPosts, 0); assert.equal(f.proofs.size, 1);
+});
+
+test('a cancelled manual native write stays observed through its late callback and deferred error', { timeout: 5_000 }, async t => {
+  const f = await fixture(false), entered = defer(), parent = new AbortController(); let callback, native, callbackDone = false;
+  const stream = new Writable({ write(bytes, _encoding, done) {
+    manualTarget(f, 'stderr', bytes.toString()); callback = done; entered.resolve();
+  } });
+  const service = createDeveloperProfileServiceForTrustedPorts({ ...f.ports, async writeOutput(channel, text) {
+    assert.equal(channel, 'stderr'); native = writeDeveloperWritableOutput(stream, text); return native;
+  } });
+  const running = service.login('work', selection, { browser: false, signal: parent.signal }); void running.catch(() => {});
+  t.after(async () => { parent.abort(); if (callback && !callbackDone) { callbackDone = true; callback(); } await running.catch(() => {}); await native?.catch(() => {}); stream.destroy(); });
+  await enteredOrSettled(entered, running); parent.abort('PRIVATE_ABORT');
+  await assert.rejects(running, fixed('developer_cancelled'));
+  assert.equal(stream.destroyed, false); assert.equal(stream.listenerCount('error'), 1);
+  assert.equal(f.closes, 1); assert.equal(f.proofs.size, 1); assert.equal(f.browsers + f.tokenPosts, 0);
+  callbackDone = true; callback(Error('PRIVATE_NATIVE_WRITE'));
+  await assert.rejects(native, fixed('developer_output_failed')); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stream.listenerCount('error'), 0); assert.equal(f.proofs.size, 1); assert.equal(f.tokenPosts, 0);
+});
+
+test('invalid manual browser options refuse before custody without inspecting private hooks', async () => {
+  const f = await fixture(false); let hooks = 0;
+  const opaque = new Proxy({}, { get() { hooks++; throw Error('PRIVATE_PROXY'); }, getPrototypeOf() { hooks++; throw Error('PRIVATE_PROXY'); } });
+  for (const options of [{ browser: 'false' }, { browser: null }, { browser: 0 }, { authorizationUrl: 'PRIVATE_URL' }, opaque,
+    { get browser() { hooks++; throw Error('PRIVATE_GETTER'); } }]) assert.throws(() => f.service.login('work', selection, options), fixed('developer_profile_invalid'));
+  assert.equal(hooks, 0); assert.equal(f.creates + f.browsers + f.tokenPosts + f.proofs.size, 0);
 });
 test('browser failure retains original protected proof and never submits exchange', async () => {
   const f = await fixture(false); f.onBrowser = async () => { throw Error('PRIVATE_BROWSER'); };
   await assert.rejects(f.service.login('work', selection), fixed('developer_operation_failed'));
   assert.equal(f.profile.state, 'proof-ready'); assert.equal(f.proofs.size, 1); assert.equal(f.tokenPosts, 0); assert.equal(f.closes, 1);
+  assert.equal(f.output.length, 0);
 });
 test('metadata pin is credential-free and rejects an unready pending key as admission', async () => {
   const f = await fixture(); assert.deepEqual(await f.service.pin('work'), f.key); assert.equal(f.checks, 2); assert.equal(f.tokenPosts, 0);

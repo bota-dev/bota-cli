@@ -29,7 +29,20 @@ test('no-key login uses explicit selected scopes and no credential argument', as
   const f = setup(); const result = await silence(() => f.program.parseAsync(['node', 'bota', '--json', 'auth', 'login', '--name', 'work', '--scope', 'devices:read']));
   const call = f.calls.find(value => value.op === 'login'); assert.equal(call.name, 'work'); assert.deepEqual(call.selection.scopes, ['devices:read']);
   assert.deepEqual(call.selection.grantResourceKinds, ['rest', 'mcp']); assert.equal(JSON.parse(result.output[0]).credential_type, 'developer_delegation');
+  assert.equal(call.options.browser, undefined);
   assert.doesNotMatch(result.output.join(''), /credentialId|storeId|attemptId|refreshToken/);
+});
+
+test('explicit manual browser login forwards only the boolean choice and preserves machine stdout', async () => {
+  for (const selected of ['dev', 'prod']) {
+    const output = [], f = setup(async (channel, text) => output.push({ channel, text }));
+    await f.program.parseAsync(['node', 'bota', '--json', '--developer-deployment', selected, 'auth', 'login', '--name', 'work', '--identity-only', '--no-browser']);
+    const call = f.calls.find(value => value.op === 'login');
+    assert.equal(call.options.browser, false); assert.deepEqual(call.selection.scopes, []);
+    assert.deepEqual(output.map(value => value.channel), ['stdout']);
+    assert.equal(JSON.parse(output[0].text).state, 'ready');
+    assert.doesNotMatch(output[0].text, /authorizationUrl|code_challenge|recovery_challenge|verifier|token/);
+  }
 });
 test('missing production config is checked before any interactive scope prompt', async () => {
   const f = setup(); f.service.configuration = () => { throw new DeveloperProfileError('developer_configuration_unavailable'); };
@@ -52,6 +65,17 @@ test('legacy key login rejects an explicit developer deployment before config wr
   const f = setup();
   await assert.rejects(f.program.parseAsync(['node', 'bota', '--developer-deployment', 'dev', 'auth', 'login', 'PRIVATE_CANARY']), refused('developer_profile_invalid'));
   assert.deepEqual(f.calls, []);
+});
+
+test('manual browser mode cannot be combined with legacy key login or key and URL selectors', async () => {
+  const legacy = setup();
+  await assert.rejects(legacy.program.parseAsync(['node', 'bota', 'auth', 'login', 'PRIVATE_CANARY', '--no-browser']), refused('developer_profile_invalid'));
+  assert.deepEqual(legacy.calls, []);
+  for (const flag of ['--profile', '--secure-profile', '--api-url', '--dashboard-url']) {
+    const f = setup();
+    await assert.rejects(f.program.parseAsync(['node', 'bota', flag, 'PRIVATE_CANARY', 'auth', 'login', '--no-browser', '--identity-only']), refused('developer_profile_invalid'));
+    assert.deepEqual(f.calls, []);
+  }
 });
 test('scope choice is explicit, bounded and never accepts arbitrary secret-looking input', async () => {
   const signal = new AbortController().signal;

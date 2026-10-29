@@ -16,8 +16,10 @@ import { DELEGATED_NATIVE_MAX_RECORDS } from './delegated-native-contract.js';
 import { DeveloperProfileError, sanitizeDeveloperProfileError, developerProfileFailure } from './developer-profile-error.js';
 import { bufferDeveloperCommandOutput } from './developer-command-output.js';
 import { isKnownDeveloperDeployment } from './developer-deployment-selection.js';
+import { acknowledgeDeveloperOutput } from './developer-output-acknowledgement.js';
 
 export interface DeveloperProfileOptions { readonly signal?: AbortSignal; readonly timeoutMs?: number }
+export interface DeveloperLoginOptions extends DeveloperProfileOptions { readonly browser?: boolean }
 export interface DeveloperProfileServicePorts {
   getDeployment(): unknown;
   createRuntime(context: DelegatedFamilyContext): Promise<DelegatedNativeRuntime>;
@@ -156,15 +158,29 @@ export function createDeveloperProfileServiceForTrustedPorts(input: DeveloperPro
   };
   return Object.freeze({
     configuration,
-    login(nameInput: string, selection: DelegatedLoginSelection, options: DeveloperProfileOptions = {}) {
+    login(nameInput: string, selection: DelegatedLoginSelection, options: DeveloperLoginOptions = {}) {
       const name = nameOf(nameInput); let requested: DelegatedLoginSelection;
-      return operation(options, async state => {
+      let captured: Record<string, unknown>;
+      try { captured = familyObject(options, [], ['signal', 'timeoutMs', 'browser']); }
+      catch { return fail('developer_profile_invalid'); }
+      if (captured.browser !== undefined && typeof captured.browser !== 'boolean') fail('developer_profile_invalid');
+      const manualBrowser = captured.browser === false;
+      delete captured.browser;
+      return operation(captured as DeveloperProfileOptions, async state => {
         const { context, deployment, runtime } = state; state.markEffect();
         checkedProfile(await runtime.reserve(name, deployment, context), name, deployment);
         const attempt = await startRecoverableDelegatedLoginAttempt(deployment, requested, runtime.retentionPort(name), { signal: context.signal });
         let completed = false;
         try {
-          context.budget.assertActive(); await ports.openBrowser(attempt.authorizationUrl, context); context.budget.assertActive();
+          context.budget.assertActive();
+          if (manualBrowser) {
+            // The attempt exists only after protected retention acknowledges.
+            // Publish its existing public authorization URL, never the retained
+            // verifiers or a token. Keep machine stdout for final metadata.
+            await acknowledgeDeveloperOutput('stderr', `Open this URL in a browser on this computer to complete Platform login:\n${attempt.authorizationUrl}\n`,
+              ports.writeOutput, () => context.budget.assertActive(), context.signal);
+          } else await ports.openBrowser(attempt.authorizationUrl, context);
+          context.budget.assertActive();
           await attempt.result; context.budget.assertActive();
           const { engine, http } = state.engine(name), pair = await http.exchangeCode(attempt, context);
           const snapshot = await engine.enroll(createTrustedDelegatedEnrollmentHandoff(deployment, async () => pair), context);

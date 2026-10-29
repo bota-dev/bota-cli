@@ -87,6 +87,30 @@ These source commands do not establish deployed production ingress, Portal
 configuration or real account consent. Omitting the deployment selector retains
 the configuration-off default.
 
+### Manual browser handoff
+
+Platform `auth login --no-browser` follows the same protected enrollment flow,
+but prints its authorization URL to stderr instead of opening the operating
+system's browser. For example, add `--no-browser` to the selected DEV or PROD
+login command above. Open the entire URL in a browser on this computer while the
+CLI remains running; the callback still uses its owned literal loopback listener.
+Default login continues to open the browser normally. There is no automatic
+manual handoff after a browser-launch failure.
+
+The URL is released only after the exact protected custody acknowledgement. It
+contains the attempt identifier, transient state and public S256 commitments;
+neither PKCE/recovery verifier, token, authorization code nor password is printed.
+Treat the URL as a transient authorization link and exclude it from retained
+receipts, logs and shared chat. JSON stdout still contains only final profile
+metadata after normal verification and cleanup. Human stderr includes the
+handoff even with `--json`; it is not a credential-export format.
+
+The existing callback/PKCE, command deadline, five-second asynchronous output
+acknowledgement ceiling and cancellation/recovery rules are unchanged. Unknown
+output or callback outcomes retain the enrollment proof; late output cannot
+resume exchange or report success. The option is exclusive to Platform login,
+not legacy key login, MCP startup or a custom endpoint/browser proxy.
+
 The available read scope names are `end_users:read`, `devices:read`,
 `recordings:read`, `transcriptions:read` and `summaries:read`. Choose the minimum
 needed scopes. `--identity-only` requests none; interactive login can show a
@@ -220,7 +244,7 @@ repairs inherited AppData permissions nor falls back to plaintext storage.
 The installed packed consumer separately checks the unchanged configuration-off
 resolver. A verification-only preload runs before the real installed entrypoint
 and refuses guarded process, network, native-module and filesystem effects.
-Nine developer commands must return the fixed configuration error, with empty
+Developer commands, including manual-browser login, must return the fixed configuration error, with empty
 stdout and zero guarded effect attempts. Module-loader reads, six exact public
 Linux startup metadata paths and the instrument's own report write are allowed.
 These tripwires cover the current bootstrap seams; they are not an adversarial

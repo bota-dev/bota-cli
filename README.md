@@ -105,6 +105,22 @@ bota --developer-deployment dev auth developer-profiles recover dev-work
 bota --developer-deployment dev auth developer-profiles logout dev-work
 ```
 
+To choose a browser yourself, add `--no-browser` to Platform login:
+
+```bash
+bota --developer-deployment prod auth login --name prod-work --scope devices:read --no-browser
+```
+
+After protected enrollment custody acknowledges, the CLI prints the authorization
+URL to stderr and waits for the same loopback callback; it does not launch a
+browser. Open the complete URL in a browser on this computer and keep the command
+running. Machine stdout, including `--json`, stays reserved for final profile
+metadata. The URL contains transient state and public S256 commitments, never
+tokens or either verifier; keep it out of saved logs, receipts and shared chat.
+This option does not change endpoints, PKCE, deadlines or recovery. An interrupted
+attempt retains its proof for explicit profile recovery and never automatically
+opens a browser as fallback. Legacy `auth login <key>` cannot use this option.
+
 `--identity-only` explicitly requests no business-read scopes. Interactive login
 can ask which read scopes to request; noninteractive login must specify them or
 `--identity-only`. DEV enrollment requests both REST and MCP resource audiences
