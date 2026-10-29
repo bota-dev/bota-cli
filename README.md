@@ -4,14 +4,28 @@ Official CLI for the [Bota](https://bota.dev) developer platform. Manage support
 
 ## Installation
 
-The current public npm `latest` is **0.1.0**, published May 25, 2026. It does not
-contain the source-preview workflows described below. The prepared candidate
-is **0.2.0-beta.0**, requires Node **22.23.2 or newer**, and is **not published**.
-The CLI source is [MIT licensed](LICENSE), approved by the owner on October 21,
-2026. Registry publication still requires exact-source release approval and
-the verified publishing workflow; packaging and synthetic tests do not publish it.
+This guide describes the **0.2.0-beta.0** command cohort, which requires Node
+**22.23.2 or newer**; native profile support has the narrower qualifications below.
+Source availability does not establish npm publication. Check the exact version,
+channel and release provenance in the [public registry](https://registry.npmjs.org/@bota.dev%2fcli)
+before installing:
 
-To install the historical public version:
+```bash
+npm view @bota.dev/cli dist-tags --json
+npm view @bota.dev/cli@0.2.0-beta.0 version dist.integrity dist.attestations --json
+# Only after that exact release is present and its provenance is verified:
+npm install -g @bota.dev/cli@0.2.0-beta.0
+```
+
+If that version is absent, these workflows require a separately qualified source
+build. The CLI source is [MIT licensed](LICENSE). Publication requires exact-source
+release approval and the verified publishing workflow; packaging and synthetic
+tests do not publish it.
+
+The historical public version **0.1.0** does not provide this command cohort.
+`latest` can still select it while a preview is available under `beta`; choose an
+exact version rather than assuming an unqualified install includes these commands.
+To install that historical version:
 
 ```bash
 npm install -g @bota.dev/cli@0.1.0
@@ -48,27 +62,29 @@ Without `--profile`, the existing selection order remains: a saved configuration
 
 The old browser key-export flow is retired. It previously exported a project
 secret in a callback URL; it was not delegated Platform login. No-argument
-`bota auth login` now selects the separate Platform enrollment coordinator, but
-the production deployment configuration is deliberately unavailable. It fails
+`bota auth login` selects the separate Platform enrollment coordinator. Without
+an explicit `--developer-deployment dev` or `--developer-deployment prod`, the
+default deployment selection remains configuration off and fails
 locally with `developer_configuration_unavailable` before native storage, a
 listener, browser launch or network access. There is no environment/custom-URL
 activation or fallback to saved keys. `auth login <key>` retains explicit legacy
 compatibility and its command-history/plaintext-storage limitations. Prefer
-environment injection or secure API-key profiles until Platform enrollment is
-qualified. The [Platform session guide](docs/platform-developer-sessions.md)
-describes the source-preview contract and remaining acceptance gates.
+environment injection or secure API-key profiles unless the installed CLI cohort
+and selected Platform deployment are qualified for enrollment. The
+[Platform session guide](docs/platform-developer-sessions.md) describes the
+command contract and separate acceptance gates.
 
 ### Platform developer sessions: explicit source selection
 
-The source preview accepts `--developer-deployment dev` to select the fixed,
+A matching CLI accepts `--developer-deployment dev` to select the fixed,
 reviewed DEV client `bota-cli-dev-v1` at `https://api.dev.bota.dev`, with Platform
 consent at `https://platform.dev.bota.dev`. Explicit `--developer-deployment prod`
 selects the reviewed production candidate `bota-cli-prod-v1` at
 `https://api.bota.dev`, with consent at `https://platform.bota.dev`.
-Ordinary users enroll through current project access and scope consent; no
-individual operator grant or manual Bota approval is required. These select source configuration;
-enabled ingress, a configured Portal build and real account consent remain
-separate acceptance gates. The public npm version does not include this change.
+Enrollment is self-service within existing project permissions and scope consent.
+These options select source configuration; enabled ingress, a configured Portal
+build and real account consent are separate acceptance gates. Verify both the
+installed release and the selected deployment before relying on this workflow.
 Without either explicit selection, the production deployment resolver remains configuration
 off and refuses before native storage or network access.
 
@@ -76,7 +92,7 @@ Always repeat the selected deployment option for enrollment, use, inspection and
 `--developer-profile <name>` to select a protected session for CLI or local MCP.
 API-key selectors and URL overrides cannot be combined with either selection;
 saved metadata, environment variables and custom URLs cannot choose a deployment.
-The source-prepared DEV commands are:
+With a matching CLI and qualified DEV deployment, use:
 
 ```bash
 # Choose only the required read scopes; repeat --scope to add another.
@@ -88,6 +104,22 @@ bota --developer-deployment dev auth developer-profiles show dev-work
 bota --developer-deployment dev auth developer-profiles recover dev-work
 bota --developer-deployment dev auth developer-profiles logout dev-work
 ```
+
+To choose a browser yourself, add `--no-browser` to Platform login:
+
+```bash
+bota --developer-deployment prod auth login --name prod-work --scope devices:read --no-browser
+```
+
+After protected enrollment custody acknowledges, the CLI prints the authorization
+URL to stderr and waits for the same loopback callback; it does not launch a
+browser. Open the complete URL in a browser on this computer and keep the command
+running. Machine stdout, including `--json`, stays reserved for final profile
+metadata. The URL contains transient state and public S256 commitments, never
+tokens or either verifier; keep it out of saved logs, receipts and shared chat.
+This option does not change endpoints, PKCE, deadlines or recovery. An interrupted
+attempt retains its proof for explicit profile recovery and never automatically
+opens a browser as fallback. Legacy `auth login <key>` cannot use this option.
 
 `--identity-only` explicitly requests no business-read scopes. Interactive login
 can ask which read scopes to request; noninteractive login must specify them or
@@ -108,7 +140,7 @@ without a plaintext fallback. Other hosts can use injected environment profiles.
 Existing ancestors of the OS-selected storage directory must also pass the
 native ownership and permissions checks. The CLI refuses an untrusted ancestor
 before creating its private root and never repairs existing permissions.
-The CLI package remains an unpublished candidate.
+Verify that the installed release includes these commands before enrolling a key.
 
 ```bash
 # Hidden terminal input; the key never appears in the command line
@@ -285,7 +317,7 @@ You can also pipe a key from your secret manager into `set` or `rotate`. Key inp
 
 Outputs contain validated metadata and `has_error`; raw `last_error`, credential hints, encrypted material, and provider errors are excluded. Integration errors use fixed safe messages and available HTTP status/code. A credential test uses only the stored key and may consume provider capacity. It checks basic provider acceptance, without qualifying transcription, summarization, or regulated-route approval. A failed check prints a safe result with `success: false` and exits nonzero. Tests and writes are attempted once, without automatic replay.
 
-These commands use typed methods in the private CLI client. No standalone Bota API SDK is released by this change. Source changes, matching backend deployment, and CLI package publication remain separate.
+These commands use typed methods in the CLI's internal HTTP client. No standalone Bota API SDK is released by this change. Source changes, matching backend deployment, and CLI package publication remain separate.
 
 ### Webhooks
 
@@ -412,7 +444,8 @@ and signal-relay checks. Fixtures use separate temporary homes and loopback port
 `verify:package` creates a tarball and receipt under `.release/`, resolves an
 isolated consumer lock, and installs it with `npm ci --ignore-scripts`. Its public
 dependency graph must pass registry signature verification; the file-installed
-CLI itself is excluded and remains unpublished/unverified. It runs the installed
+CLI itself is excluded, so this check does not verify its public registry
+publication or provenance. It runs the installed
 command's version/help, hosted-mode help, legacy identity read,
 profile enrollment/status and credential-free metadata list/removal against
 synthetic loopback fixtures. It uses temporary homes and npm configuration with

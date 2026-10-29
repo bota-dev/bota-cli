@@ -94,6 +94,8 @@ try {
   assert.equal((await run(process.execPath, ['--import', 'tsx', 'src/index.ts', '--version'], root)).stdout.trim(), pkg.version);
   assert.match((await cli(['--help'])).stdout, /Bota developer CLI/);
   assert.match((await cli(['mcp', '--mode', 'hosted', '--help'])).stdout, /--mode/);
+  const loginHelp = await cli(['auth', 'login', '--help']);
+  assert.match(loginHelp.stdout, /--no-browser/); assert.equal(loginHelp.stderr, '');
   const secureHelp = await cli(['auth', 'secure-profiles', '--help']);
   assert.match(secureHelp.stdout, /add.*name/); assert.match(secureHelp.stdout, /recover.*name/);
   assert.match(secureHelp.stdout, /migrate.*name/); assert.match(secureHelp.stdout, /list/);
@@ -113,6 +115,7 @@ try {
     'native_module', 'filesystem_read', 'filesystem_write'].sort();
   const developerCommands = [
     ['auth', 'login', '--identity-only'],
+    ['auth', 'login', '--identity-only', '--no-browser'],
     ['--developer-profile', developerName, 'auth', 'status'],
     ['--developer-profile', developerName, 'devices', 'list'],
     ['--developer-profile', developerName, 'mcp', '--mode', 'hosted'],
@@ -214,7 +217,7 @@ try {
       limits: ['Node module-loader reads, six exact public Linux is-wsl/container metadata paths, parent installation/temporary cleanup and the captured guard-report writer are permitted.',
         'No adversarial-sandbox claim for direct internal bindings, previously captured runtime internals, process.exit or OS/runtime startup effects.',
         'Existing temporary HOME isolates legacy config only; no new native root, credential-store or endpoint redirection.'] },
-    checks: ['packed-npm-manifest-policy-synthetic-registry-fields', 'installed-exact-file-bytes', 'public-dependency-registry-signatures', 'installed-version', 'source-version', 'installed-source-license', 'installed-help', 'installed-hosted-mode-help', 'installed-secure-profile-help-no-native-bootstrap',
+    checks: ['packed-npm-manifest-policy-synthetic-registry-fields', 'installed-exact-file-bytes', 'public-dependency-registry-signatures', 'installed-version', 'source-version', 'installed-source-license', 'installed-help', 'installed-hosted-mode-help', 'installed-manual-browser-help-no-native-bootstrap', 'installed-secure-profile-help-no-native-bootstrap',
       'installed-secure-selector-refusal', 'installed-secure-origin-refusal-before-storage', 'synthetic-empty-scope-identity',
       'installed-secure-migration-explicit-input',
       'installed-environment-profile-enrollment', 'installed-profile-status-one-preflight', 'installed-profile-local-list-removal',
