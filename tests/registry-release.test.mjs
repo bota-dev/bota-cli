@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { releaseChannel, assertPublicationPrerequisites } from '../scripts/check-publication.mjs';
-import { assertInstalledPackage, assertRegistryManifest, assertReleaseContext, assertReleaseTrust, assertTags, assertUnoccupiedVersion, assertVerifiedProvenance } from '../scripts/registry-release.mjs';
+import { assertInstalledPackage, assertRegistryManifest, assertReleaseContext, assertReleaseTrust, assertTags, assertUnoccupiedVersion, assertVerifiedProvenance, readRegistryMetadata } from '../scripts/registry-release.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const version = '0.2.0-beta.0', commit = '1'.repeat(40);
@@ -65,6 +65,50 @@ test('registry manifest must retain inspected fields, fixed URLs and exact tarba
     const changed = manifest(); mutate(changed); assert.throws(() => assertRegistryManifest(changed, pkg, receipt, tarball), /blocked/);
   }
   assert.throws(() => assertRegistryManifest(manifest(), pkg, receipt, Buffer.from('changed')), /blocked/);
+});
+
+test('public metadata may omit only the packing files directive; artifact and runtime fields remain exact', () => {
+  const packed = { ...pkg, files: ['dist/index.js', 'README.md', 'LICENSE'] };
+  const publicManifest = manifest();
+  assert.doesNotThrow(() => assertRegistryManifest(publicManifest, packed, receipt, tarball));
+  assert.doesNotThrow(() => assertRegistryManifest({ ...publicManifest, files: packed.files }, packed, receipt, tarball));
+  for (const files of [null, [], ['unexpected.js']]) assert.throws(() => assertRegistryManifest({ ...publicManifest, files }, packed, receipt, tarball), /blocked/);
+  for (const key of ['bin', 'scripts', 'dependencies', 'repository', 'license']) {
+    const changed = clone(publicManifest); delete changed[key];
+    assert.throws(() => assertRegistryManifest(changed, packed, receipt, tarball), /blocked/);
+  }
+  assert.throws(() => assertRegistryManifest(publicManifest, packed, receipt, Buffer.from('changed')), /blocked/);
+});
+
+test('registry reads avoid the preflight cache key and keep bounded fixed-origin response checks', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  const cached = packument(), fresh = packument(); fresh['dist-tags'].beta = version;
+  try {
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      return new Response(JSON.stringify(url.endsWith('-0') ? cached : fresh));
+    };
+    const signal = new AbortController().signal;
+    assert.deepEqual(await readRegistryMetadata(context, 0, signal), cached);
+    assert.deepEqual(await readRegistryMetadata(context, 1, signal), fresh);
+    assert.notEqual(calls[0].url, calls[1].url);
+    for (const [ordinal, call] of calls.entries()) {
+      assert.equal(call.url, `https://registry.npmjs.org/@bota.dev%2fcli?verification=123-1-${ordinal}`);
+      assert.equal(call.options.cache, 'no-store'); assert.equal(call.options.headers['cache-control'], 'no-cache');
+      assert.equal(call.options.redirect, 'error'); assert.equal(call.options.credentials, 'omit');
+    }
+    for (const [input, ordinal] of [[{ ...context, run: '123&other=1' }, 2], [{ ...context, attempt: '2' }, 2], [context, -1], [context, 0.5]]) {
+      await assert.rejects(readRegistryMetadata(input, ordinal, signal), /blocked/);
+    }
+    assert.equal(calls.length, 2);
+    globalThis.fetch = async () => new Response('{}', { status: 503 });
+    await assert.rejects(readRegistryMetadata(context, 2, signal), /blocked/);
+    globalThis.fetch = async () => new Response('x'.repeat(12 * 1024 * 1024 + 1));
+    await assert.rejects(readRegistryMetadata(context, 3, signal), /response size/);
+    globalThis.fetch = async () => new Response('not JSON');
+    await assert.rejects(readRegistryMetadata(context, 4, signal), SyntaxError);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('verified-npm-output policy pins subject, source, run and workflow; synthetic DTOs are not cryptographic evidence', () => {
