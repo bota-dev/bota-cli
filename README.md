@@ -39,6 +39,11 @@ same version to `latest` only after authenticated public package verification.
 Local MCP is included in this package and follows its release; hosted MCP and
 Platform login availability retain their own backend deployment/live acceptance.
 
+Every PR event, including title/body-only edits, runs the real required `Scan`.
+Title/body-only edits use a separate concurrency group so they cannot cancel
+an active source scan. Base retargets and unknown edit payloads retain the
+source concurrency group.
+
 ## Authentication
 
 ```bash

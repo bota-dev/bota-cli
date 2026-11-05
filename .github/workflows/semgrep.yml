@@ -21,11 +21,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: sast-${{ github.event.pull_request.number || github.ref }}-${{ inputs.revision || 'current' }}
+  group: sast-${{ github.event_name == 'pull_request' && github.event.action == 'edited' && (github.event.changes.title || github.event.changes.body) && !github.event.changes.base && 'metadata-' || '' }}${{ github.event.pull_request.number || github.ref }}-${{ inputs.revision || 'current' }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   scan:
+    # Metadata scans retain the required check name without cancelling source scans.
     name: Scan
     runs-on: ubuntu-latest
     timeout-minutes: 20
