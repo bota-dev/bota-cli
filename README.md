@@ -39,6 +39,11 @@ same version to `latest` only after authenticated public package verification.
 Local MCP is included in this package and follows its release; hosted MCP and
 Platform login availability retain their own backend deployment/live acceptance.
 
+The read-only Semgrep `Scan` remains required for source events. Title/body-only PR edits skip runner allocation under a noncanonical check name
+and a separate concurrency group; they cannot replace or cancel the required
+source `Scan`. Base retargets and unknown edit payloads still scan. GitHub may
+display the unevaluated name expression for a skipped job.
+
 ## Authentication
 
 ```bash
